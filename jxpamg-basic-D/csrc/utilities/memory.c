@@ -9,7 +9,7 @@
 
 extern int myid;
 
-JX_Int malloc_type = 0;
+JX_Int malloc_type = 1;
 
 /*!
  * \fn JX_Int jx_OutOfMemory
@@ -104,7 +104,7 @@ jx_MAlloc_MT(size_t size)
 char *
 jx_CAlloc(size_t count, size_t elt_size)
 {
-   // JX_Int malloc_type = 0;
+   // JX_Int malloc_type = 1;
 
    char *ptr;
    switch (malloc_type)
@@ -176,7 +176,7 @@ jx_CAlloc_MT(size_t count, size_t elt_size)
 char *
 jx_ReAlloc(char *ptr, size_t size)
 {
-   // JX_Int malloc_type = 0;
+   // JX_Int malloc_type = 1;
 
    switch (malloc_type)
    {

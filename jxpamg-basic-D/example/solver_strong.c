@@ -58,6 +58,7 @@
 #include "jx_pamg.h"
 #include "jx_krylov.h"
 #include "jx_diagscale.h"
+#include "hthread_host.h"
 #include "jx_blockprec.h"
 #include "jx_euclid.h"
 #include "jx_combined.h"
@@ -176,6 +177,7 @@ main( int argc, char *argv[] )
    //  启动 MPI
    //--------------------------
    jx_MPI_Init(&argc, &argv);
+   hthread_dev_open(0);
    jx_MPI_Comm_rank(comm, &myid);
    jx_MPI_Comm_size(comm, &nprocs);
    #ifdef USING_HWLOC
