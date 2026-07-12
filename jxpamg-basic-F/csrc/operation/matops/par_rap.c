@@ -1,0 +1,3526 @@
+//========================================================================//
+//  JXFPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
+//  Institute of Applied Physics and Computational Mathematics            //
+//  School of Mathematics and Computational Science Xiangtan University   //
+//========================================================================//
+
+/*!
+ *  par_rap.c -- Computing the coarse operater in PAMG.
+ *  Date: 2011/09/03
+ */ 
+
+#include "jxf_mv.h"
+#ifndef JXF_HPCSRMV_HEADER
+#include "jxf_hpcsr.h"
+#endif
+/*!
+ * \fn jxf_CSRMatrix *jxf_ExchangeRAPData
+ * \date 2011/09/03
+ */
+jxf_CSRMatrix *
+jxf_ExchangeRAPData( jxf_CSRMatrix *RAP_int, jxf_ParCSRCommPkg *comm_pkg_RT)
+{
+   JXF_Int     *RAP_int_i    = 0;
+   JXF_Int     *RAP_int_j    = NULL;
+   JXF_Real  *RAP_int_data = NULL;
+   JXF_Int      num_cols     = 0;
+
+   MPI_Comm comm        = jxf_ParCSRCommPkgComm(comm_pkg_RT);
+   JXF_Int num_recvs        = jxf_ParCSRCommPkgNumRecvs(comm_pkg_RT);
+   JXF_Int *recv_procs      = jxf_ParCSRCommPkgRecvProcs(comm_pkg_RT);
+   JXF_Int *recv_vec_starts = jxf_ParCSRCommPkgRecvVecStarts(comm_pkg_RT);
+   JXF_Int num_sends        = jxf_ParCSRCommPkgNumSends(comm_pkg_RT);
+   JXF_Int *send_procs      = jxf_ParCSRCommPkgSendProcs(comm_pkg_RT);
+   JXF_Int *send_map_starts = jxf_ParCSRCommPkgSendMapStarts(comm_pkg_RT);
+
+   jxf_CSRMatrix *RAP_ext;
+
+   JXF_Int     *RAP_ext_i    = NULL;
+   JXF_Int     *RAP_ext_j    = NULL;
+   JXF_Real  *RAP_ext_data = NULL;
+
+   jxf_ParCSRCommHandle *comm_handle = NULL;
+   jxf_ParCSRCommPkg *tmp_comm_pkg   = NULL;
+
+   JXF_Int *jdata_recv_vec_starts;
+   JXF_Int *jdata_send_map_starts;
+
+   JXF_Int num_rows;
+   JXF_Int num_nonzeros;
+   JXF_Int i, j;
+   JXF_Int num_procs;
+
+   jxf_MPI_Comm_size(comm, &num_procs);
+
+   RAP_ext_i             = jxf_CTAlloc(JXF_Int, send_map_starts[num_sends] + 1);
+   jdata_recv_vec_starts = jxf_CTAlloc(JXF_Int, num_recvs + 1);
+   jdata_send_map_starts = jxf_CTAlloc(JXF_Int, num_sends + 1);
+ 
+  /*--------------------------------------------------------------------------
+   * recompute RAP_int_i so that RAP_int_i[j+1] contains the number of
+   * elements of row j (to be determined through send_map_elmnts on the
+   * receiving end)
+   *--------------------------------------------------------------------------*/
+
+   if (num_recvs)
+   {
+      RAP_int_i = jxf_CSRMatrixI(RAP_int);
+      RAP_int_j = jxf_CSRMatrixJ(RAP_int);
+      RAP_int_data = jxf_CSRMatrixData(RAP_int);
+      num_cols = jxf_CSRMatrixNumCols(RAP_int);
+   }
+
+   jdata_recv_vec_starts[0] = 0;
+   for (i = 0; i < num_recvs; i ++)
+   {
+      jdata_recv_vec_starts[i+1] = RAP_int_i[recv_vec_starts[i+1]];
+   }
+ 
+   for (i = num_recvs; i > 0; i --)
+   {
+      for (j = recv_vec_starts[i]; j > recv_vec_starts[i-1]; j --)
+      {
+         RAP_int_i[j] -= RAP_int_i[j-1];
+      }
+   }
+
+  /*--------------------------------------------------------------------------
+   * initialize communication 
+   *--------------------------------------------------------------------------*/
+
+   if (num_recvs && num_sends)
+   {
+      comm_handle = jxf_ParCSRCommHandleCreate(12,comm_pkg_RT, &RAP_int_i[1], &RAP_ext_i[1]);
+   }
+   else if (num_recvs)
+   {
+      comm_handle = jxf_ParCSRCommHandleCreate(12,comm_pkg_RT, &RAP_int_i[1], NULL);
+   }
+   else if (num_sends)
+   {
+      comm_handle = jxf_ParCSRCommHandleCreate(12,comm_pkg_RT, NULL, &RAP_ext_i[1]);
+   }
+
+   tmp_comm_pkg = jxf_CTAlloc(jxf_ParCSRCommPkg, 1);
+   jxf_ParCSRCommPkgComm(tmp_comm_pkg) = comm;
+   jxf_ParCSRCommPkgNumSends(tmp_comm_pkg) = num_recvs;
+   jxf_ParCSRCommPkgNumRecvs(tmp_comm_pkg) = num_sends;
+   jxf_ParCSRCommPkgSendProcs(tmp_comm_pkg) = recv_procs;
+   jxf_ParCSRCommPkgRecvProcs(tmp_comm_pkg) = send_procs;
+
+   jxf_ParCSRCommHandleDestroy(comm_handle);
+   comm_handle = NULL;
+
+   /*--------------------------------------------------------------------------
+   * compute num_nonzeros for RAP_ext
+   *--------------------------------------------------------------------------*/
+
+   for (i = 0; i < num_sends; i ++)
+   {
+      for (j = send_map_starts[i]; j < send_map_starts[i+1]; j ++)
+      {
+         RAP_ext_i[j+1] += RAP_ext_i[j];
+      }
+   }
+
+   num_rows = send_map_starts[num_sends];
+   num_nonzeros = RAP_ext_i[num_rows];
+   if (num_nonzeros)
+   {
+      RAP_ext_j = jxf_CTAlloc(JXF_Int, num_nonzeros);
+      RAP_ext_data = jxf_CTAlloc(JXF_Real, num_nonzeros);
+   }
+
+   for (i = 0; i < num_sends+1; i ++)
+   {
+      jdata_send_map_starts[i] = RAP_ext_i[send_map_starts[i]];
+   }
+
+   jxf_ParCSRCommPkgRecvVecStarts(tmp_comm_pkg) = jdata_send_map_starts;      
+   jxf_ParCSRCommPkgSendMapStarts(tmp_comm_pkg) = jdata_recv_vec_starts;
+   
+   #if JXF_REODER_SEND_RECV
+   jxf_hpIfReorderMatvecCommPkg(tmp_comm_pkg)   = 0;
+   jxf_hpCSRCommPkgReorder(tmp_comm_pkg);
+   #endif
+
+   comm_handle = jxf_ParCSRCommHandleCreate(1, tmp_comm_pkg, RAP_int_data, RAP_ext_data);
+   jxf_ParCSRCommHandleDestroy(comm_handle);
+   comm_handle = NULL;
+
+   comm_handle = jxf_ParCSRCommHandleCreate(11, tmp_comm_pkg, RAP_int_j, RAP_ext_j);
+   RAP_ext = jxf_CSRMatrixCreate(num_rows, num_cols, num_nonzeros);
+
+   jxf_CSRMatrixI(RAP_ext) = RAP_ext_i;
+   if (num_nonzeros)
+   {
+      jxf_CSRMatrixJ(RAP_ext) = RAP_ext_j;
+      jxf_CSRMatrixData(RAP_ext) = RAP_ext_data;
+   }
+
+   jxf_ParCSRCommHandleDestroy(comm_handle); 
+   comm_handle = NULL;
+
+   jxf_TFree(jdata_recv_vec_starts);
+   jxf_TFree(jdata_send_map_starts);
+
+#if JXF_REODER_SEND_RECV
+   if(jxf_hpSendReorderMap(tmp_comm_pkg))
+   {
+      jxf_TFree(jxf_hpSendReorderMap(tmp_comm_pkg));
+   }
+   if(jxf_hpRecvReorderMap(tmp_comm_pkg))
+   {
+      jxf_TFree(jxf_hpRecvReorderMap(tmp_comm_pkg));
+   }
+   if(jxf_hpSendReorderProcs(tmp_comm_pkg))
+   {
+      jxf_TFree(jxf_hpSendReorderProcs(tmp_comm_pkg));
+   }
+   if(jxf_hpRecvReorderProcs(tmp_comm_pkg))
+   {
+      jxf_TFree(jxf_hpRecvReorderProcs(tmp_comm_pkg));
+   }
+#endif
+   jxf_TFree(tmp_comm_pkg);
+
+   return RAP_ext;
+}
+
+
+/*!
+ * \fn JXF_Int jxf_PAMGBuildCoarseOperator
+ * \brief Build the coarse operator in PAMG.
+ * \date 2011/09/03
+ */ 
+JXF_Int
+jxf_PAMGBuildCoarseOperator( jxf_ParCSRMatrix  *RT,
+                            jxf_ParCSRMatrix  *par_A,
+                            jxf_ParCSRMatrix  *par_P,
+                            jxf_ParCSRMatrix **RAP_ptr )
+{
+   #ifdef JXF_SplitRAP
+      return (jxf_PAMGBuildCoarseOperatorKT_SplitRAP(RT, par_A, par_P, 0, RAP_ptr));
+   #else
+      return (jxf_PAMGBuildCoarseOperatorKT_origin(RT, par_A, par_P, 0, RAP_ptr));
+   #endif
+}
+
+JXF_Int
+jxf_PAMGBuildCoarseOperatorKT( jxf_ParCSRMatrix  *RT,
+                              jxf_ParCSRMatrix  *A,
+                              jxf_ParCSRMatrix  *P,
+   	                          JXF_Int            keepTranspose,
+                              jxf_ParCSRMatrix **RAP_ptr )
+{
+   #ifdef JXF_SplitRAP
+      return (jxf_PAMGBuildCoarseOperatorKT_SplitRAP(RT, A, P, keepTranspose, RAP_ptr));
+   #else
+      return (jxf_PAMGBuildCoarseOperatorKT_origin(RT, A, P, keepTranspose, RAP_ptr));
+   #endif
+}
+
+/*!
+ * \fn int jxf_PAMGBuildCoarseOperatorKT
+ * \brief Build the coarse operator in PAMG.
+ * \date 2011/09/03
+ */ 
+
+JXF_Int
+jxf_PAMGBuildCoarseOperatorKT_origin( jxf_ParCSRMatrix  *RT,
+                              jxf_ParCSRMatrix  *A,
+                              jxf_ParCSRMatrix  *P,
+   	                          JXF_Int            keepTranspose,
+                              jxf_ParCSRMatrix **RAP_ptr )
+{
+   MPI_Comm        comm = jxf_ParCSRMatrixComm(A);
+
+   jxf_CSRMatrix *RT_diag = jxf_ParCSRMatrixDiag(RT);
+   jxf_CSRMatrix *RT_offd = jxf_ParCSRMatrixOffd(RT);
+   JXF_Int             num_cols_diag_RT = jxf_CSRMatrixNumCols(RT_diag);
+   JXF_Int             num_cols_offd_RT = jxf_CSRMatrixNumCols(RT_offd);
+   JXF_Int             num_rows_offd_RT = jxf_CSRMatrixNumRows(RT_offd);
+   jxf_ParCSRCommPkg   *comm_pkg_RT = jxf_ParCSRMatrixCommPkg(RT);
+   JXF_Int             num_recvs_RT = 0;
+   JXF_Int             num_sends_RT = 0;
+   JXF_Int             *send_map_starts_RT = NULL;
+   JXF_Int             *send_map_elmts_RT = NULL;
+
+   jxf_CSRMatrix *A_diag = jxf_ParCSRMatrixDiag(A);
+   
+   JXF_Real      *A_diag_data = jxf_CSRMatrixData(A_diag);
+   JXF_Int             *A_diag_i = jxf_CSRMatrixI(A_diag);
+   JXF_Int             *A_diag_j = jxf_CSRMatrixJ(A_diag);
+
+   jxf_CSRMatrix *A_offd = jxf_ParCSRMatrixOffd(A);
+   
+   JXF_Real      *A_offd_data = jxf_CSRMatrixData(A_offd);
+   JXF_Int             *A_offd_i = jxf_CSRMatrixI(A_offd);
+   JXF_Int             *A_offd_j = jxf_CSRMatrixJ(A_offd);
+
+   JXF_Int  num_cols_diag_A = jxf_CSRMatrixNumCols(A_diag);
+   JXF_Int  num_cols_offd_A = jxf_CSRMatrixNumCols(A_offd);
+
+   jxf_CSRMatrix *P_diag = jxf_ParCSRMatrixDiag(P);
+   
+   JXF_Real      *P_diag_data = jxf_CSRMatrixData(P_diag);
+   JXF_Int             *P_diag_i = jxf_CSRMatrixI(P_diag);
+   JXF_Int             *P_diag_j = jxf_CSRMatrixJ(P_diag);
+
+   jxf_CSRMatrix *P_offd = jxf_ParCSRMatrixOffd(P);
+   JXF_Int             *col_map_offd_P = jxf_ParCSRMatrixColMapOffd(P);
+   
+   JXF_Real      *P_offd_data = jxf_CSRMatrixData(P_offd);
+   JXF_Int             *P_offd_i = jxf_CSRMatrixI(P_offd);
+   JXF_Int             *P_offd_j = jxf_CSRMatrixJ(P_offd);
+
+   JXF_Int  first_col_diag_P = jxf_ParCSRMatrixFirstColDiag(P);
+   JXF_Int  last_col_diag_P;
+   JXF_Int  num_cols_diag_P = jxf_CSRMatrixNumCols(P_diag);
+   JXF_Int  num_cols_offd_P = jxf_CSRMatrixNumCols(P_offd);
+   JXF_Int *coarse_partitioning = jxf_ParCSRMatrixColStarts(P);
+   JXF_Int *RT_partitioning = jxf_ParCSRMatrixColStarts(RT);
+
+   jxf_ParCSRMatrix *RAP = NULL;
+   JXF_Int                *col_map_offd_RAP = NULL;
+   JXF_Int                *new_col_map_offd_RAP = NULL;
+
+   jxf_CSRMatrix *RAP_int = NULL;
+
+   JXF_Real      *RAP_int_data = NULL;
+   JXF_Int             *RAP_int_i = NULL;
+   JXF_Int             *RAP_int_j = NULL;
+
+   jxf_CSRMatrix *RAP_ext = NULL;
+
+   JXF_Real      *RAP_ext_data = NULL;
+   JXF_Int             *RAP_ext_i = NULL;
+   JXF_Int             *RAP_ext_j = NULL;
+
+   jxf_CSRMatrix *RAP_diag = NULL;
+
+   JXF_Real      *RAP_diag_data = NULL;
+   JXF_Int             *RAP_diag_i;
+   JXF_Int             *RAP_diag_j = NULL;
+
+   jxf_CSRMatrix *RAP_offd = NULL;
+
+   JXF_Real      *RAP_offd_data = NULL;
+   JXF_Int             *RAP_offd_i = NULL;
+   JXF_Int             *RAP_offd_j = NULL;
+
+   JXF_Int              RAP_size;
+   JXF_Int              RAP_ext_size;
+   JXF_Int              RAP_diag_size;
+   JXF_Int              RAP_offd_size;
+   JXF_Int              P_ext_diag_size;
+   JXF_Int              P_ext_offd_size;
+   JXF_Int              first_col_diag_RAP;
+   JXF_Int              last_col_diag_RAP;
+   JXF_Int              num_cols_offd_RAP = 0;
+   
+   jxf_CSRMatrix *R_diag = NULL;
+   
+   JXF_Real      *R_diag_data;
+   JXF_Int             *R_diag_i;
+   JXF_Int             *R_diag_j;
+
+   jxf_CSRMatrix *R_offd = NULL;
+   
+   JXF_Real          *R_offd_data = NULL;
+   JXF_Int             *R_offd_i    = NULL;
+   JXF_Int             *R_offd_j    = NULL;
+
+   JXF_Real *RA_diag_data_array = NULL;
+   JXF_Int *RA_diag_j_array = NULL;
+   JXF_Real *RA_offd_data_array = NULL;
+   JXF_Int *RA_offd_j_array = NULL;
+
+   jxf_CSRMatrix *Ps_ext = NULL;
+   
+   JXF_Real      *Ps_ext_data = NULL;
+   JXF_Int             *Ps_ext_i = NULL;
+   JXF_Int             *Ps_ext_j = NULL;
+
+   JXF_Real      *P_ext_diag_data = NULL;
+   JXF_Int             *P_ext_diag_i = NULL;
+   JXF_Int             *P_ext_diag_j = NULL;
+
+   JXF_Real      *P_ext_offd_data = NULL;
+   JXF_Int             *P_ext_offd_i = NULL;
+   JXF_Int             *P_ext_offd_j = NULL;
+
+   JXF_Int             *col_map_offd_Pext = NULL;
+   JXF_Int             *map_P_to_Pext = NULL;
+   JXF_Int             *map_P_to_RAP = NULL;
+   JXF_Int             *map_Pext_to_RAP = NULL;
+
+   JXF_Int             *P_marker = NULL;
+   JXF_Int            **P_mark_array;
+   JXF_Int            **A_mark_array;
+   JXF_Int             *A_marker;
+   JXF_Int             *temp = NULL;
+
+   JXF_Int              n_coarse, n_coarse_RT;
+   JXF_Int              square = 1;
+   JXF_Int              num_cols_offd_Pext = 0;
+   
+   JXF_Int              ic, i, j, k;
+   JXF_Int              i1, i2, i3, ii, ns, ne, size, rest;
+   JXF_Int              cnt = 0; /*value; */
+   JXF_Int              jj1, jj2, jj3, jcol;
+   
+   JXF_Int             *jj_count, *jj_cnt_diag, *jj_cnt_offd;
+   JXF_Int              jj_counter, jj_count_diag, jj_count_offd;
+   JXF_Int              jj_row_begining, jj_row_begin_diag, jj_row_begin_offd;
+   JXF_Int              start_indexing = 0; /* start indexing for RAP_data at 0 */
+   JXF_Int              num_nz_cols_A;
+   JXF_Int              num_procs;
+   JXF_Int              num_threads;
+
+   JXF_Real       r_entry;
+   JXF_Real       r_a_product;
+   JXF_Real       r_a_p_product;
+   
+   JXF_Real       zero = 0.0;
+   JXF_Int 	   *prefix_sum_workspace;
+
+   #ifdef JXF_MiniBranRAP
+   JXF_Int      *RAP_ext_marker = NULL;
+   #endif
+
+   /*-----------------------------------------------------------------------
+    *  Copy ParCSRMatrix RT into CSRMatrix R so that we have row-wise access 
+    *  to restriction .
+    *-----------------------------------------------------------------------*/
+
+   jxf_MPI_Comm_size(comm,&num_procs);
+   num_threads = jxf_NumThreads();
+
+   if (comm_pkg_RT)
+   {
+        num_recvs_RT = jxf_ParCSRCommPkgNumRecvs(comm_pkg_RT);
+        num_sends_RT = jxf_ParCSRCommPkgNumSends(comm_pkg_RT);
+        send_map_starts_RT =jxf_ParCSRCommPkgSendMapStarts(comm_pkg_RT);
+        send_map_elmts_RT = jxf_ParCSRCommPkgSendMapElmts(comm_pkg_RT);
+   }
+   else if (num_procs > 1)
+   {
+        jxf_MatvecCommPkgCreate(RT);
+        comm_pkg_RT = jxf_ParCSRMatrixCommPkg(RT);
+        num_recvs_RT = jxf_ParCSRCommPkgNumRecvs(comm_pkg_RT);
+        num_sends_RT = jxf_ParCSRCommPkgNumSends(comm_pkg_RT);
+        send_map_starts_RT =jxf_ParCSRCommPkgSendMapStarts(comm_pkg_RT);
+        send_map_elmts_RT = jxf_ParCSRCommPkgSendMapElmts(comm_pkg_RT);
+   }
+
+   jxf_CSRMatrixTranspose(RT_diag,&R_diag,1); 
+   if (num_cols_offd_RT) 
+   {
+        jxf_CSRMatrixTranspose(RT_offd,&R_offd,1); 
+        R_offd_data = jxf_CSRMatrixData(R_offd);
+        R_offd_i    = jxf_CSRMatrixI(R_offd);
+        R_offd_j    = jxf_CSRMatrixJ(R_offd);
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Access the CSR vectors for R. Also get sizes of fine and
+    *  coarse grids.
+    *-----------------------------------------------------------------------*/
+
+   R_diag_data = jxf_CSRMatrixData(R_diag);
+   R_diag_i    = jxf_CSRMatrixI(R_diag);
+   R_diag_j    = jxf_CSRMatrixJ(R_diag);
+
+   n_coarse = jxf_ParCSRMatrixGlobalNumCols(P);
+   num_nz_cols_A = num_cols_diag_A + num_cols_offd_A;
+
+   n_coarse_RT = jxf_ParCSRMatrixGlobalNumCols(RT);
+   if (n_coarse != n_coarse_RT)
+      square = 0;
+
+   /*-----------------------------------------------------------------------
+    *  Generate Ps_ext, i.e. portion of P that is stored on neighbor procs
+    *  and needed locally for triple matrix product 
+    *-----------------------------------------------------------------------*/
+
+   if (num_procs > 1) 
+   {
+        Ps_ext = jxf_ParCSRMatrixExtractBExt(P,A,1);
+        Ps_ext_data = jxf_CSRMatrixData(Ps_ext);
+        Ps_ext_i    = jxf_CSRMatrixI(Ps_ext);
+        Ps_ext_j    = jxf_CSRMatrixJ(Ps_ext);
+   }
+
+   P_ext_diag_i = jxf_TAlloc(JXF_Int,num_cols_offd_A+1);
+   P_ext_offd_i = jxf_TAlloc(JXF_Int,num_cols_offd_A+1);
+   P_ext_diag_i[0] = 0;
+   P_ext_offd_i[0] = 0;
+   P_ext_diag_size = 0;
+   P_ext_offd_size = 0;
+   last_col_diag_P = first_col_diag_P + num_cols_diag_P - 1;
+
+   /*JXF_Int prefix_sum_workspace[2*(num_threads + 1)];*/
+   prefix_sum_workspace = jxf_TAlloc(JXF_Int, 2*(num_threads + 1));
+
+#define JXF_SMP_PRIVATE i,j
+#define JXF_SMP_PAR_REGION
+#include "../../../include/jxf_smp_forloop.h"
+   {
+      JXF_Int i_begin, i_end;
+      jxf_GetSimpleThreadPartition(&i_begin, &i_end, num_cols_offd_A);
+
+      JXF_Int P_ext_diag_size_private = 0;
+      JXF_Int P_ext_offd_size_private = 0;
+
+      for (i = i_begin; i < i_end; i++)
+      {
+         for (j=Ps_ext_i[i]; j < Ps_ext_i[i+1]; j++)
+            if (Ps_ext_j[j] < first_col_diag_P || Ps_ext_j[j] > last_col_diag_P)
+               P_ext_offd_size_private++;
+            else
+               P_ext_diag_size_private++;
+      }
+
+      jxf_prefix_sum_pair(&P_ext_diag_size_private, &P_ext_diag_size, &P_ext_offd_size_private, &P_ext_offd_size, prefix_sum_workspace);
+
+#define JXF_SMP_MASTER
+#include "../../../include/jxf_smp_forloop.h"
+      {
+         if (P_ext_diag_size)
+         {
+            P_ext_diag_j = jxf_CTAlloc(JXF_Int, P_ext_diag_size);
+            P_ext_diag_data = jxf_CTAlloc(JXF_Real, P_ext_diag_size);
+         }
+         if (P_ext_offd_size)
+         {
+            P_ext_offd_j = jxf_CTAlloc(JXF_Int, P_ext_offd_size);
+            P_ext_offd_data = jxf_CTAlloc(JXF_Real, P_ext_offd_size);
+         }
+      }
+#define JXF_SMP_BARRIER
+#include "../../../include/jxf_smp_forloop.h"
+
+      for (i = i_begin; i < i_end; i++)
+      {
+         for (j=Ps_ext_i[i]; j < Ps_ext_i[i+1]; j++)
+         {
+            if (Ps_ext_j[j] < first_col_diag_P || Ps_ext_j[j] > last_col_diag_P)
+            {
+               P_ext_offd_j[P_ext_offd_size_private] = Ps_ext_j[j];
+               P_ext_offd_data[P_ext_offd_size_private++] = Ps_ext_data[j];
+            }
+            else
+            {
+               P_ext_diag_j[P_ext_diag_size_private] = Ps_ext_j[j] - first_col_diag_P;
+               P_ext_diag_data[P_ext_diag_size_private++] = Ps_ext_data[j];
+            }
+         }
+         P_ext_diag_i[i+1] = P_ext_diag_size_private;
+         P_ext_offd_i[i+1] = P_ext_offd_size_private;
+      }
+   } /* omp parallel */
+   jxf_TFree(prefix_sum_workspace);
+
+   if (num_procs > 1) 
+   {
+      jxf_CSRMatrixDestroy(Ps_ext);
+      Ps_ext = NULL;
+   }
+
+   if (P_ext_offd_size || num_cols_offd_P)
+   {
+      temp = jxf_CTAlloc(JXF_Int, P_ext_offd_size+num_cols_offd_P);
+      for (i=0; i < P_ext_offd_size; i++)
+         temp[i] = P_ext_offd_j[i];
+      cnt = P_ext_offd_size;
+      for (i=0; i < num_cols_offd_P; i++)
+         temp[cnt++] = col_map_offd_P[i];
+   }
+   if (cnt)
+   {
+      JXF_Int value;
+      jxf_qsort0(temp, 0, cnt-1);
+
+      num_cols_offd_Pext = 1;
+      value = temp[0];
+      for (i=1; i < cnt; i++)
+      {
+         if (temp[i] > value)
+         {
+            value = temp[i];
+            temp[num_cols_offd_Pext++] = value;
+         }
+      }
+   }
+ 
+   if (num_cols_offd_Pext)
+        col_map_offd_Pext = jxf_CTAlloc(JXF_Int,num_cols_offd_Pext);
+
+   for (i=0; i < num_cols_offd_Pext; i++)
+      col_map_offd_Pext[i] = temp[i];
+
+   if (P_ext_offd_size || num_cols_offd_P)
+      jxf_TFree(temp);
+
+   for (i=0 ; i < P_ext_offd_size; i++)
+      P_ext_offd_j[i] = jxf_BinarySearch(col_map_offd_Pext,
+                                           P_ext_offd_j[i],
+                                           num_cols_offd_Pext);
+   if (num_cols_offd_P)
+   {
+      map_P_to_Pext = jxf_CTAlloc(JXF_Int,num_cols_offd_P);
+
+      cnt = 0;
+      for (i=0; i < num_cols_offd_Pext; i++)
+         if (col_map_offd_Pext[i] == col_map_offd_P[cnt])
+         {
+            map_P_to_Pext[cnt++] = i;
+            if (cnt == num_cols_offd_P) break;
+         }
+   }
+
+   /*-----------------------------------------------------------------------
+    *  First Pass: Determine size of RAP_int and set up RAP_int_i if there 
+    *  are more than one processor and nonzero elements in R_offd
+    *-----------------------------------------------------------------------*/
+
+  P_mark_array = jxf_CTAlloc(JXF_Int *, num_threads);
+  A_mark_array = jxf_CTAlloc(JXF_Int *, num_threads);
+
+  if (num_cols_offd_RT)
+  {
+   jj_count = jxf_CTAlloc(JXF_Int, num_threads);
+
+#define JXF_SMP_PRIVATE i,ii,ic,i1,i2,i3,jj1,jj2,jj3,ns,ne,size,rest,jj_counter,jj_row_begining,A_marker,P_marker
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_offd_RT/num_threads;
+     rest = num_cols_offd_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+   
+   /*-----------------------------------------------------------------------
+    *  Allocate marker arrays.
+    *-----------------------------------------------------------------------*/
+
+   P_marker = NULL;
+   if (num_cols_offd_Pext || num_cols_diag_P)
+   {
+      P_mark_array[ii] = jxf_CTAlloc(JXF_Int, num_cols_diag_P+num_cols_offd_Pext);
+      P_marker = P_mark_array[ii];
+   }
+   A_mark_array[ii] = jxf_CTAlloc(JXF_Int, num_nz_cols_A);
+   A_marker = A_mark_array[ii];
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+
+   jj_counter = start_indexing;
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_Pext; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+   for (i = 0; i < num_nz_cols_A; i++)
+   {      
+      A_marker[i] = -1;
+   }   
+
+   /*-----------------------------------------------------------------------
+    *  Loop over exterior c-points
+    *-----------------------------------------------------------------------*/
+    
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      jj_row_begining = jj_counter;
+
+      /*--------------------------------------------------------------------
+       *  Loop over entries in row ic of R_offd.
+       *--------------------------------------------------------------------*/
+   
+      for (jj1 = R_offd_i[ic]; jj1 < R_offd_i[ic+1]; jj1++)
+      {
+         i1  = R_offd_j[jj1];
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_offd.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = A_offd_i[i1]; jj2 < A_offd_i[i1+1]; jj2++)
+         {
+            i2 = A_offd_j[jj2];
+
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+
+            if (A_marker[i2] != ic)
+            {
+
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+
+               A_marker[i2] = ic;
+               
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_ext.
+                *-----------------------------------------------------------*/
+
+               for (jj3 = P_ext_diag_i[i2]; jj3 < P_ext_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_ext_diag_j[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     jj_counter++;
+                  }
+               }
+               for (jj3 = P_ext_offd_i[i2]; jj3 < P_ext_offd_i[i2+1]; jj3++)
+               {
+                  i3 = P_ext_offd_j[jj3] + num_cols_diag_P;
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     jj_counter++;
+                  }
+               }
+            }
+         }
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_diag.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = A_diag_i[i1]; jj2 < A_diag_i[i1+1]; jj2++)
+         {
+            i2 = A_diag_j[jj2];
+
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+
+            if (A_marker[i2+num_cols_offd_A] != ic)
+            {
+
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+
+               A_marker[i2+num_cols_offd_A] = ic;
+               
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_diag.
+                *-----------------------------------------------------------*/
+
+               for (jj3 = P_diag_i[i2]; jj3 < P_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_diag_j[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     jj_counter++;
+                  }
+               }
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_offd.
+                *-----------------------------------------------------------*/
+
+               for (jj3 = P_offd_i[i2]; jj3 < P_offd_i[i2+1]; jj3++)
+               {
+                  i3 = map_P_to_Pext[P_offd_j[jj3]] + num_cols_diag_P;
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     jj_counter++;
+                  }
+               }
+            }
+         }
+      }
+    }
+
+    jj_count[ii] = jj_counter;
+
+   }
+  
+   /*-----------------------------------------------------------------------
+    *  Allocate RAP_int_data and RAP_int_j arrays.
+    *-----------------------------------------------------------------------*/
+   for (i = 0; i < num_threads-1; i++)
+      jj_count[i+1] += jj_count[i];
+    
+   RAP_size = jj_count[num_threads-1];
+   RAP_int_i = jxf_CTAlloc(JXF_Int, num_cols_offd_RT+1);
+   RAP_int_data = jxf_CTAlloc(JXF_Real, RAP_size);
+   RAP_int_j    = jxf_CTAlloc(JXF_Int, RAP_size);
+
+   RAP_int_i[num_cols_offd_RT] = RAP_size;
+
+   /*-----------------------------------------------------------------------
+    *  Second Pass: Fill in RAP_int_data and RAP_int_j.
+    *-----------------------------------------------------------------------*/
+
+#define JXF_SMP_PRIVATE i,ii,ic,i1,i2,i3,jj1,jj2,jj3,ns,ne,size,rest,jj_counter,jj_row_begining,A_marker,P_marker,r_entry,r_a_product,r_a_p_product
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_offd_RT/num_threads;
+     rest = num_cols_offd_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+   P_marker = NULL;
+   if (num_cols_offd_Pext || num_cols_diag_P)
+      P_marker = P_mark_array[ii];
+   A_marker = A_mark_array[ii];
+
+   jj_counter = start_indexing;
+   if (ii > 0) jj_counter = jj_count[ii-1];
+
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_Pext; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+   for (i = 0; i < num_nz_cols_A; i++)
+   {      
+      A_marker[i] = -1;
+   }   
+   
+   /*-----------------------------------------------------------------------
+    *  Loop over exterior c-points.
+    *-----------------------------------------------------------------------*/
+    
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      jj_row_begining = jj_counter;
+      RAP_int_i[ic] = jj_counter;
+
+      /*--------------------------------------------------------------------
+       *  Loop over entries in row ic of R_offd.
+       *--------------------------------------------------------------------*/
+   
+      for (jj1 = R_offd_i[ic]; jj1 < R_offd_i[ic+1]; jj1++)
+      {
+         i1  = R_offd_j[jj1];
+         r_entry = R_offd_data[jj1];
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_offd.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = A_offd_i[i1]; jj2 < A_offd_i[i1+1]; jj2++)
+         {
+            i2 = A_offd_j[jj2];
+            r_a_product = r_entry * A_offd_data[jj2];
+            
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+
+            if (A_marker[i2] != ic)
+            {
+
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+
+               A_marker[i2] = ic;
+               
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_ext.
+                *-----------------------------------------------------------*/
+
+               for (jj3 = P_ext_diag_i[i2]; jj3 < P_ext_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_ext_diag_j[jj3];
+                  r_a_p_product = r_a_product * P_ext_diag_data[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, create a new entry.
+                   *  If it has, add new contribution.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     RAP_int_data[jj_counter] = r_a_p_product;
+                     RAP_int_j[jj_counter] = i3 + first_col_diag_P;
+                     jj_counter++;
+                  }
+                  else
+                  {
+                     RAP_int_data[P_marker[i3]] += r_a_p_product;
+                  }
+               }
+
+               for (jj3 = P_ext_offd_i[i2]; jj3 < P_ext_offd_i[i2+1]; jj3++)
+               {
+                  i3 = P_ext_offd_j[jj3] + num_cols_diag_P;
+                  r_a_p_product = r_a_product * P_ext_offd_data[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, create a new entry.
+                   *  If it has, add new contribution.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     RAP_int_data[jj_counter] = r_a_p_product;
+                     RAP_int_j[jj_counter] 
+                                = col_map_offd_Pext[i3-num_cols_diag_P];
+                     jj_counter++;
+                  }
+                  else
+                  {
+                     RAP_int_data[P_marker[i3]] += r_a_p_product;
+                  }
+               }
+            }
+
+            /*--------------------------------------------------------------
+             *  If i2 is previously visited ( A_marker[12]=ic ) it yields
+             *  no new entries in RAP and can just add new contributions.
+             *--------------------------------------------------------------*/
+
+            else
+            {
+               for (jj3 = P_ext_diag_i[i2]; jj3 < P_ext_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_ext_diag_j[jj3];
+                  r_a_p_product = r_a_product * P_ext_diag_data[jj3];
+                  RAP_int_data[P_marker[i3]] += r_a_p_product;
+               }
+               for (jj3 = P_ext_offd_i[i2]; jj3 < P_ext_offd_i[i2+1]; jj3++)
+               {
+                  i3 = P_ext_offd_j[jj3] + num_cols_diag_P;
+                  r_a_p_product = r_a_product * P_ext_offd_data[jj3];
+                  RAP_int_data[P_marker[i3]] += r_a_p_product;
+               }
+            }
+         }
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_diag.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = A_diag_i[i1]; jj2 < A_diag_i[i1+1]; jj2++)
+         {
+            i2 = A_diag_j[jj2];
+            r_a_product = r_entry * A_diag_data[jj2];
+            
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+
+            if (A_marker[i2+num_cols_offd_A] != ic)
+            {
+
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+
+               A_marker[i2+num_cols_offd_A] = ic;
+               
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_diag.
+                *-----------------------------------------------------------*/
+
+               for (jj3 = P_diag_i[i2]; jj3 < P_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_diag_j[jj3];
+                  r_a_p_product = r_a_product * P_diag_data[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, create a new entry.
+                   *  If it has, add new contribution.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     RAP_int_data[jj_counter] = r_a_p_product;
+                     RAP_int_j[jj_counter] = i3 + first_col_diag_P;
+                     jj_counter++;
+                  }
+                  else
+                  {
+                     RAP_int_data[P_marker[i3]] += r_a_p_product;
+                  }
+               }
+               for (jj3 = P_offd_i[i2]; jj3 < P_offd_i[i2+1]; jj3++)
+               {
+                  i3 = map_P_to_Pext[P_offd_j[jj3]] + num_cols_diag_P;
+                  r_a_p_product = r_a_product * P_offd_data[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, create a new entry.
+                   *  If it has, add new contribution.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begining)
+                  {
+                     P_marker[i3] = jj_counter;
+                     RAP_int_data[jj_counter] = r_a_p_product;
+                     RAP_int_j[jj_counter] = 
+                                col_map_offd_Pext[i3-num_cols_diag_P];
+                     jj_counter++;
+                  }
+                  else
+                  {
+                     RAP_int_data[P_marker[i3]] += r_a_p_product;
+                  }
+               }
+            }
+
+            /*--------------------------------------------------------------
+             *  If i2 is previously visited ( A_marker[12]=ic ) it yields
+             *  no new entries in RAP and can just add new contributions.
+             *--------------------------------------------------------------*/
+
+            else
+            {
+               for (jj3 = P_diag_i[i2]; jj3 < P_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_diag_j[jj3];
+                  r_a_p_product = r_a_product * P_diag_data[jj3];
+                  RAP_int_data[P_marker[i3]] += r_a_p_product;
+               }
+               for (jj3 = P_offd_i[i2]; jj3 < P_offd_i[i2+1]; jj3++)
+               {
+                  i3 = map_P_to_Pext[P_offd_j[jj3]] + num_cols_diag_P;
+                  r_a_p_product = r_a_product * P_offd_data[jj3];
+                  RAP_int_data[P_marker[i3]] += r_a_p_product;
+               }
+            }
+         }
+      }
+   }
+   if (num_cols_offd_Pext || num_cols_diag_P)
+      jxf_TFree(P_mark_array[ii]);
+   jxf_TFree(A_mark_array[ii]);
+   }
+
+   RAP_int = jxf_CSRMatrixCreate(num_cols_offd_RT,num_rows_offd_RT,RAP_size);
+   jxf_CSRMatrixI(RAP_int) = RAP_int_i;
+   jxf_CSRMatrixJ(RAP_int) = RAP_int_j;
+   jxf_CSRMatrixData(RAP_int) = RAP_int_data;
+   jxf_TFree(jj_count);
+  }
+
+   RAP_ext_size = 0;
+   if (num_sends_RT || num_recvs_RT)
+   {
+        RAP_ext = jxf_ExchangeRAPData(RAP_int,comm_pkg_RT);
+        RAP_ext_i = jxf_CSRMatrixI(RAP_ext);
+        RAP_ext_j = jxf_CSRMatrixJ(RAP_ext);
+        RAP_ext_data = jxf_CSRMatrixData(RAP_ext);
+        RAP_ext_size = RAP_ext_i[jxf_CSRMatrixNumRows(RAP_ext)];
+   }
+   if (num_cols_offd_RT)
+   {
+      jxf_CSRMatrixDestroy(RAP_int);
+      RAP_int = NULL;
+   }
+ 
+   RAP_diag_i = jxf_TAlloc(JXF_Int, num_cols_diag_RT+1);
+   RAP_offd_i = jxf_TAlloc(JXF_Int, num_cols_diag_RT+1);
+
+   first_col_diag_RAP = first_col_diag_P;
+   last_col_diag_RAP = first_col_diag_P + num_cols_diag_P - 1;
+
+   /*-----------------------------------------------------------------------
+    *  check for new nonzero columns in RAP_offd generated through RAP_ext
+    *-----------------------------------------------------------------------*/
+
+   if (RAP_ext_size || num_cols_offd_Pext)
+   {
+      temp = jxf_CTAlloc(JXF_Int,RAP_ext_size+num_cols_offd_Pext);
+      cnt = 0;
+      for (i=0; i < RAP_ext_size; i++)
+         if (RAP_ext_j[i] < first_col_diag_RAP 
+                        || RAP_ext_j[i] > last_col_diag_RAP)
+            temp[cnt++] = RAP_ext_j[i];
+      for (i=0; i < num_cols_offd_Pext; i++)
+         temp[cnt++] = col_map_offd_Pext[i];
+
+
+      if (cnt)
+      {
+         JXF_Int value;
+         jxf_qsort0(temp,0,cnt-1);
+         value = temp[0];
+         num_cols_offd_RAP = 1;
+         for (i=1; i < cnt; i++)
+         {
+            if (temp[i] > value)
+            {
+               value = temp[i];
+               temp[num_cols_offd_RAP++] = value;
+            }
+         }
+      }
+
+   /* now evaluate col_map_offd_RAP */
+      if (num_cols_offd_RAP)
+         col_map_offd_RAP = jxf_CTAlloc(JXF_Int, num_cols_offd_RAP);
+
+      for (i=0 ; i < num_cols_offd_RAP; i++)
+         col_map_offd_RAP[i] = temp[i];
+  
+      jxf_TFree(temp);
+   }
+
+   if (num_cols_offd_P)
+   {
+      map_P_to_RAP = jxf_TAlloc(JXF_Int,num_cols_offd_P);
+
+      cnt = 0;
+      for (i=0; i < num_cols_offd_RAP; i++)
+         if (col_map_offd_RAP[i] == col_map_offd_P[cnt])
+         {
+            map_P_to_RAP[cnt++] = i;
+            if (cnt == num_cols_offd_P) break;
+         }
+   }
+
+   if (num_cols_offd_Pext)
+   {
+      map_Pext_to_RAP = jxf_TAlloc(JXF_Int,num_cols_offd_Pext);
+
+      cnt = 0;
+      for (i=0; i < num_cols_offd_RAP; i++)
+         if (col_map_offd_RAP[i] == col_map_offd_Pext[cnt])
+         {
+            map_Pext_to_RAP[cnt++] = i;
+            if (cnt == num_cols_offd_Pext) break;
+         }
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Convert RAP_ext column indices
+    *-----------------------------------------------------------------------*/
+
+#include "../../../include/jxf_smp_forloop.h"
+   for (i=0; i < RAP_ext_size; i++)
+      if (RAP_ext_j[i] < first_col_diag_RAP 
+                        || RAP_ext_j[i] > last_col_diag_RAP)
+            RAP_ext_j[i] = num_cols_diag_P
+                                + jxf_BinarySearch(col_map_offd_RAP,
+                                                RAP_ext_j[i],num_cols_offd_RAP);
+      else
+            RAP_ext_j[i] -= first_col_diag_RAP;
+
+/*   need to allocate new P_marker etc. and make further changes */
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+   jj_cnt_diag = jxf_CTAlloc(JXF_Int, num_threads);
+   jj_cnt_offd = jxf_CTAlloc(JXF_Int, num_threads);
+
+#define JXF_SMP_PRIVATE i,j,k,jcol,ii,ic,i1,i2,i3,jj1,jj2,jj3,ns,ne,size,rest,jj_count_diag,jj_count_offd,jj_row_begin_diag,jj_row_begin_offd,A_marker,P_marker
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_diag_RT/num_threads;
+     rest = num_cols_diag_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+
+   P_mark_array[ii] = jxf_CTAlloc(JXF_Int, num_cols_diag_P+num_cols_offd_RAP);
+   A_mark_array[ii] = jxf_CTAlloc(JXF_Int, num_nz_cols_A);
+   P_marker = P_mark_array[ii];
+   A_marker = A_mark_array[ii];
+   jj_count_diag = start_indexing;
+   jj_count_offd = start_indexing;
+
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_RAP; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+   for (i = 0; i < num_nz_cols_A; i++)
+   {      
+      A_marker[i] = -1;
+   }   
+   #ifdef JXF_MiniBranRAP
+   RAP_ext_marker = jxf_CTAlloc(JXF_Int, num_sends_RT + 1);
+   for (i = 0;i < num_sends_RT;i++)
+      RAP_ext_marker[i] = send_map_starts_RT[i];
+   #endif
+   /*-----------------------------------------------------------------------
+    *  Loop over interior c-points.
+    *-----------------------------------------------------------------------*/
+   
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      /*--------------------------------------------------------------------
+       *  Set marker for diagonal entry, RAP_{ic,ic}. and for all points
+       *  being added to row ic of RAP_diag and RAP_offd through RAP_ext
+       *--------------------------------------------------------------------*/
+
+      jj_row_begin_diag = jj_count_diag;
+      jj_row_begin_offd = jj_count_offd;
+
+      if (square)
+         P_marker[ic] = jj_count_diag++;
+      #ifdef JXF_MiniBranRAP
+      for (i=0; i < num_sends_RT; i++)
+        for (j = RAP_ext_marker[i]; j < send_map_starts_RT[i+1]; j++)
+        {   
+            if (send_map_elmts_RT[j] < ic)
+               RAP_ext_marker[i]++;
+            else
+               if (send_map_elmts_RT[j] == ic)
+               {    
+                  for (k=RAP_ext_i[j]; k < RAP_ext_i[j+1]; k++)
+                  {
+                     jcol = RAP_ext_j[k];
+                     if (jcol < num_cols_diag_P)
+                     {
+                        if (P_marker[jcol] < jj_row_begin_diag)
+                        {
+                           P_marker[jcol] = jj_count_diag;
+                           jj_count_diag++;
+                        }
+                     }
+                     else
+                     {
+                        if (P_marker[jcol] < jj_row_begin_offd)
+                        {
+                           P_marker[jcol] = jj_count_offd;
+                           jj_count_offd++;
+                        }
+                     }
+                  }
+                  RAP_ext_marker[i]++;
+                  break;
+               }
+               else
+                  break;
+         }
+      #else
+      for (i=0; i < num_sends_RT; i++)
+        for (j = send_map_starts_RT[i]; j < send_map_starts_RT[i+1]; j++)
+            if (send_map_elmts_RT[j] == ic)
+            {
+                for (k=RAP_ext_i[j]; k < RAP_ext_i[j+1]; k++)
+                {
+                   jcol = RAP_ext_j[k];
+                   if (jcol < num_cols_diag_P)
+                   {
+                        if (P_marker[jcol] < jj_row_begin_diag)
+                        {
+                                P_marker[jcol] = jj_count_diag;
+                                jj_count_diag++;
+                        }
+                   }
+                   else
+                   {
+                        if (P_marker[jcol] < jj_row_begin_offd)
+                        {
+                                P_marker[jcol] = jj_count_offd;
+                                jj_count_offd++;
+                        }
+                   }
+                }
+                break;
+            }
+         #endif   
+
+      /*--------------------------------------------------------------------
+       *  Loop over entries in row ic of R_diag.
+       *--------------------------------------------------------------------*/
+   
+      for (jj1 = R_diag_i[ic]; jj1 < R_diag_i[ic+1]; jj1++)
+      {
+         i1  = R_diag_j[jj1];
+ 
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_offd.
+          *-----------------------------------------------------------------*/
+         
+         if (num_cols_offd_A)
+         {
+           for (jj2 = A_offd_i[i1]; jj2 < A_offd_i[i1+1]; jj2++)
+           {
+            i2 = A_offd_j[jj2];
+ 
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+ 
+            if (A_marker[i2] != ic)
+            {
+ 
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+ 
+               A_marker[i2] = ic;
+               
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_ext.
+                *-----------------------------------------------------------*/
+ 
+               for (jj3 = P_ext_diag_i[i2]; jj3 < P_ext_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_ext_diag_j[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begin_diag)
+                  {
+                     P_marker[i3] = jj_count_diag;
+                     jj_count_diag++;
+                  }
+               }
+               for (jj3 = P_ext_offd_i[i2]; jj3 < P_ext_offd_i[i2+1]; jj3++)
+               {
+                  i3 = map_Pext_to_RAP[P_ext_offd_j[jj3]]+num_cols_diag_P;
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i3] < jj_row_begin_offd)
+                  {
+                     P_marker[i3] = jj_count_offd;
+                     jj_count_offd++;
+                  }
+               }
+            }
+           }
+         }
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_diag.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = A_diag_i[i1]; jj2 < A_diag_i[i1+1]; jj2++)
+         {
+            i2 = A_diag_j[jj2];
+ 
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+ 
+            if (A_marker[i2+num_cols_offd_A] != ic)
+            {
+ 
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+ 
+               A_marker[i2+num_cols_offd_A] = ic;
+               
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_diag.
+                *-----------------------------------------------------------*/
+ 
+               for (jj3 = P_diag_i[i2]; jj3 < P_diag_i[i2+1]; jj3++)
+               {
+                  i3 = P_diag_j[jj3];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+ 
+                  if (P_marker[i3] < jj_row_begin_diag)
+                  {
+                     P_marker[i3] = jj_count_diag;
+                     jj_count_diag++;
+                  }
+               }
+               /*-----------------------------------------------------------
+                *  Loop over entries in row i2 of P_offd.
+                *-----------------------------------------------------------*/
+
+               if (num_cols_offd_P)
+               { 
+                 for (jj3 = P_offd_i[i2]; jj3 < P_offd_i[i2+1]; jj3++)
+                 {
+                  i3 = map_P_to_RAP[P_offd_j[jj3]] + num_cols_diag_P;
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+ 
+                  if (P_marker[i3] < jj_row_begin_offd)
+                  {
+                     P_marker[i3] = jj_count_offd;
+                     jj_count_offd++;
+                  }
+                 }
+               } 
+            }
+         }
+      }
+            
+      /*--------------------------------------------------------------------
+       * Set RAP_diag_i and RAP_offd_i for this row.
+       *--------------------------------------------------------------------*/
+/* 
+      RAP_diag_i[ic] = jj_row_begin_diag;
+      RAP_offd_i[ic] = jj_row_begin_offd;
+*/      
+    }
+    jj_cnt_diag[ii] = jj_count_diag;
+    jj_cnt_offd[ii] = jj_count_offd;
+   }
+
+   for (i=0; i < num_threads-1; i++)
+   {
+      jj_cnt_diag[i+1] += jj_cnt_diag[i];
+      jj_cnt_offd[i+1] += jj_cnt_offd[i];
+   }
+
+   jj_count_diag = jj_cnt_diag[num_threads-1];
+   jj_count_offd = jj_cnt_offd[num_threads-1];
+
+   RAP_diag_i[num_cols_diag_RT] = jj_count_diag;
+   RAP_offd_i[num_cols_diag_RT] = jj_count_offd;
+ 
+   /*-----------------------------------------------------------------------
+    *  Allocate RAP_diag_data and RAP_diag_j arrays.
+    *  Allocate RAP_offd_data and RAP_offd_j arrays.
+    *-----------------------------------------------------------------------*/
+ 
+   RAP_diag_size = jj_count_diag;
+   if (RAP_diag_size)
+   { 
+      RAP_diag_data = jxf_CTAlloc(JXF_Real, RAP_diag_size);
+      RAP_diag_j    = jxf_CTAlloc(JXF_Int, RAP_diag_size);
+   } 
+ 
+   RAP_offd_size = jj_count_offd;
+   if (RAP_offd_size)
+   { 
+        RAP_offd_data = jxf_CTAlloc(JXF_Real, RAP_offd_size);
+        RAP_offd_j    = jxf_CTAlloc(JXF_Int, RAP_offd_size);
+   } 
+
+   if (RAP_offd_size == 0 && num_cols_offd_RAP != 0)
+   {
+      num_cols_offd_RAP = 0;
+      jxf_TFree(col_map_offd_RAP);
+   }
+
+   RA_diag_data_array = jxf_TAlloc(JXF_Real, num_cols_diag_A*num_threads);
+   RA_diag_j_array = jxf_TAlloc(JXF_Int, num_cols_diag_A*num_threads);
+   if (num_cols_offd_A)
+   {
+      RA_offd_data_array = jxf_TAlloc(JXF_Real, num_cols_offd_A*num_threads);
+      RA_offd_j_array = jxf_TAlloc(JXF_Int, num_cols_offd_A*num_threads);
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Second Pass: Fill in RAP_diag_data and RAP_diag_j.
+    *  Second Pass: Fill in RAP_offd_data and RAP_offd_j.
+    *-----------------------------------------------------------------------*/
+
+#define JXF_SMP_PRIVATE i,j,k,jcol,ii,ic,i1,i2,i3,jj1,jj2,jj3,ns,ne,size,rest,jj_count_diag,jj_count_offd,jj_row_begin_diag,jj_row_begin_offd,A_marker,P_marker,r_entry,r_a_product,r_a_p_product
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_diag_RT/num_threads;
+     rest = num_cols_diag_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+
+   P_marker = P_mark_array[ii];
+   A_marker = A_mark_array[ii];
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_RAP; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+   for (i = 0; i < num_nz_cols_A ; i++)
+   {      
+      A_marker[i] = -1;
+   }   
+   
+   jj_count_diag = start_indexing;
+   jj_count_offd = start_indexing;
+   if (ii > 0)
+   {
+      jj_count_diag = jj_cnt_diag[ii-1];
+      jj_count_offd = jj_cnt_offd[ii-1];
+   }
+
+   // temporal matrix RA = R*A
+   // only need to store one row per thread because R*A and (R*A)*P are fused
+   // into one loop.
+   jxf_CSRMatrix RA_diag, RA_offd;
+   RA_diag.data = RA_diag_data_array + num_cols_diag_A*ii;
+   RA_diag.j = RA_diag_j_array + num_cols_diag_A*ii;
+   RA_offd.data = NULL;
+   RA_offd.j = NULL;
+   RA_diag.num_nonzeros = 0;
+   RA_offd.num_nonzeros = 0;
+
+   if (num_cols_offd_A)
+   {
+      RA_offd.data = RA_offd_data_array + num_cols_offd_A*ii;
+      RA_offd.j = RA_offd_j_array + num_cols_offd_A*ii;
+   }
+   #ifdef JXF_MiniBranRAP
+   for (i = 0;i < num_sends_RT;i++)
+      RAP_ext_marker[i] = send_map_starts_RT[i];
+   #endif
+
+   /*-----------------------------------------------------------------------
+    *  Loop over interior c-points.
+    *-----------------------------------------------------------------------*/
+    
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      /*--------------------------------------------------------------------
+       *  Create diagonal entry, RAP_{ic,ic} and add entries of RAP_ext 
+       *--------------------------------------------------------------------*/
+
+      jj_row_begin_diag = jj_count_diag;
+      jj_row_begin_offd = jj_count_offd;
+      RAP_diag_i[ic] = jj_row_begin_diag;
+      RAP_offd_i[ic] = jj_row_begin_offd;
+
+      JXF_Int ra_row_begin_diag = RA_diag.num_nonzeros;
+      JXF_Int ra_row_begin_offd = RA_offd.num_nonzeros;
+
+      if (square)
+      {
+         P_marker[ic] = jj_count_diag;
+         RAP_diag_data[jj_count_diag] = zero;
+         RAP_diag_j[jj_count_diag] = ic;
+         jj_count_diag++;
+      }
+
+      #ifdef JXF_MiniBranRAP
+      for (i=0; i < num_sends_RT; i++)
+        for (j = RAP_ext_marker[i]; j < send_map_starts_RT[i+1]; j++)
+        {   
+            if (send_map_elmts_RT[j] < ic)
+               RAP_ext_marker[i]++;
+            else
+               if (send_map_elmts_RT[j] == ic)
+               {    
+                  for (k=RAP_ext_i[j]; k < RAP_ext_i[j+1]; k++)
+                  {
+                     jcol = RAP_ext_j[k];
+                     if (jcol < num_cols_diag_P)
+                     {
+                        if (P_marker[jcol] < jj_row_begin_diag)
+                        {
+                           P_marker[jcol] = jj_count_diag;
+                           RAP_diag_data[jj_count_diag] = RAP_ext_data[k];
+                           RAP_diag_j[jj_count_diag] = jcol;
+                           jj_count_diag++;
+                        }
+                        else
+                        {
+                           RAP_diag_data[P_marker[jcol]]
+                               += RAP_ext_data[k];
+                        }
+                     }
+                     else
+                     {
+                        if (P_marker[jcol] < jj_row_begin_offd)
+                        {
+                           P_marker[jcol] = jj_count_offd;
+                           RAP_offd_data[jj_count_offd] = RAP_ext_data[k];
+                           RAP_offd_j[jj_count_offd] = jcol-num_cols_diag_P;
+                           jj_count_offd++;
+                        }
+                        else
+                        {
+                           RAP_offd_data[P_marker[jcol]]
+                               += RAP_ext_data[k];
+                        }
+                     }
+                  }
+                  RAP_ext_marker[i]++;
+                  break;
+               }
+               else
+                  break;
+         }
+      #else
+      for (i=0; i < num_sends_RT; i++)
+        for (j = send_map_starts_RT[i]; j < send_map_starts_RT[i+1]; j++)
+            if (send_map_elmts_RT[j] == ic)
+            {
+                for (k=RAP_ext_i[j]; k < RAP_ext_i[j+1]; k++)
+                {
+                   jcol = RAP_ext_j[k];
+                   if (jcol < num_cols_diag_P)
+                   {
+                        if (P_marker[jcol] < jj_row_begin_diag)
+                        {
+                                P_marker[jcol] = jj_count_diag;
+                                RAP_diag_data[jj_count_diag] 
+                                        = RAP_ext_data[k];
+                                RAP_diag_j[jj_count_diag] = jcol;
+                                jj_count_diag++;
+                        }
+                        else
+                                RAP_diag_data[P_marker[jcol]]
+                                        += RAP_ext_data[k];
+                   }
+                   else
+                   {
+                        if (P_marker[jcol] < jj_row_begin_offd)
+                        {
+                                P_marker[jcol] = jj_count_offd;
+                                RAP_offd_data[jj_count_offd] 
+                                        = RAP_ext_data[k];
+                                RAP_offd_j[jj_count_offd] 
+                                        = jcol-num_cols_diag_P;
+                                jj_count_offd++;
+                        }
+                        else
+                                RAP_offd_data[P_marker[jcol]]
+                                        += RAP_ext_data[k];
+                   }
+                }
+                break;
+            }
+      #endif
+
+
+
+      /*--------------------------------------------------------------------
+       *  Loop over entries in row ic of R_diag and compute row ic of RA.
+       *--------------------------------------------------------------------*/
+
+      for (jj1 = R_diag_i[ic]; jj1 < R_diag_i[ic+1]; jj1++)
+      {
+         i1  = R_diag_j[jj1];
+         r_entry = R_diag_data[jj1];
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_offd.
+          *-----------------------------------------------------------------*/
+         
+         if (num_cols_offd_A)
+         {
+          for (jj2 = A_offd_i[i1]; jj2 < A_offd_i[i1+1]; jj2++)
+          {
+            i2 = A_offd_j[jj2];
+            JXF_Real a_entry = A_offd_data[jj2];
+            JXF_Int marker = A_marker[i2];
+
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+
+            if (marker < ra_row_begin_offd)
+            {
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+
+               A_marker[i2] = RA_offd.num_nonzeros;
+               RA_offd.data[RA_offd.num_nonzeros - ra_row_begin_offd] = r_entry * a_entry;
+               RA_offd.j[RA_offd.num_nonzeros - ra_row_begin_offd] = i2;
+               RA_offd.num_nonzeros++;
+            }
+            /*--------------------------------------------------------------
+             *  If i2 is previously visited ( A_marker[12]=ic ) it yields
+             *  no new entries in RA and can just add new contributions.
+             *--------------------------------------------------------------*/
+            else
+            {
+               RA_offd.data[marker - ra_row_begin_offd] += r_entry * a_entry;
+                 // JSP: compiler will more likely to generate FMA instructions
+                 // when we don't eliminate common subexpressions of
+                 // r_entry * A_offd_data[jj2] manually.
+            }
+          } // loop over entries in row i1 of A_offd
+         } // num_cols_offd_A
+            
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_diag.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = A_diag_i[i1]; jj2 < A_diag_i[i1+1]; jj2++)
+         {
+            i2 = A_diag_j[jj2];
+            JXF_Real a_entry = A_diag_data[jj2];
+            JXF_Int marker = A_marker[i2+num_cols_offd_A];
+            
+            /*--------------------------------------------------------------
+             *  Check A_marker to see if point i2 has been previously
+             *  visited. New entries in RAP only occur from unmarked points.
+             *--------------------------------------------------------------*/
+
+            if (marker < ra_row_begin_diag)
+            {
+               /*-----------------------------------------------------------
+                *  Mark i2 as visited.
+                *-----------------------------------------------------------*/
+               A_marker[i2+num_cols_offd_A] = RA_diag.num_nonzeros;
+               RA_diag.data[RA_diag.num_nonzeros - ra_row_begin_diag] = r_entry * a_entry;
+               RA_diag.j[RA_diag.num_nonzeros - ra_row_begin_diag] = i2;
+               RA_diag.num_nonzeros++;
+            }
+            /*--------------------------------------------------------------
+             *  If i2 is previously visited ( A_marker[12]=ic ) it yields
+             *  no new entries in RA and can just add new contributions.
+             *--------------------------------------------------------------*/
+            else
+            {
+               RA_diag.data[marker - ra_row_begin_diag] += r_entry * a_entry;
+            }
+         } // loop over entries in row i1 of A_diag
+      } // loop over entries in row ic of R_diag
+
+      /*--------------------------------------------------------------------
+       * Loop over entries in row ic of RA_offd.
+       *--------------------------------------------------------------------*/
+
+      for (jj1 = ra_row_begin_offd; jj1 < RA_offd.num_nonzeros; jj1++)
+      {
+         i1 = RA_offd.j[jj1 - ra_row_begin_offd];
+         r_a_product = RA_offd.data[jj1 - ra_row_begin_offd];
+
+         /*-----------------------------------------------------------
+          *  Loop over entries in row i1 of P_ext.
+          *-----------------------------------------------------------*/
+         for (jj2 = P_ext_diag_i[i1]; jj2 < P_ext_diag_i[i1+1]; jj2++)
+         {
+            i2 = P_ext_diag_j[jj2];
+            JXF_Real p_entry = P_ext_diag_data[jj2];
+            JXF_Int marker = P_marker[i2];
+
+            /*--------------------------------------------------------
+             *  Check P_marker to see that RAP_{ic,i2} has not already
+             *  been accounted for. If it has not, create a new entry.
+             *  If it has, add new contribution.
+             *--------------------------------------------------------*/
+            if (marker < jj_row_begin_diag)
+            {
+               P_marker[i2] = jj_count_diag;
+               RAP_diag_data[jj_count_diag] = r_a_product * p_entry;
+               RAP_diag_j[jj_count_diag] = i2;
+               jj_count_diag++;
+            }
+            else
+               RAP_diag_data[marker] += r_a_product * p_entry;
+         }
+         for (jj2 = P_ext_offd_i[i1]; jj2 < P_ext_offd_i[i1+1]; jj2++)
+         {
+            i2 = map_Pext_to_RAP[P_ext_offd_j[jj2]] + num_cols_diag_P;
+            JXF_Real p_entry = P_ext_offd_data[jj2];
+            JXF_Int marker = P_marker[i2];
+
+            /*--------------------------------------------------------
+             *  Check P_marker to see that RAP_{ic,i2} has not already
+             *  been accounted for. If it has not, create a new entry.
+             *  If it has, add new contribution.
+             *--------------------------------------------------------*/
+            if (marker < jj_row_begin_offd)
+            {
+               P_marker[i2] = jj_count_offd;
+               RAP_offd_data[jj_count_offd] = r_a_product * p_entry;
+               RAP_offd_j[jj_count_offd] = i2 - num_cols_diag_P;
+               jj_count_offd++;
+            }
+            else
+               RAP_offd_data[marker] += r_a_product * p_entry;
+         }
+      } // loop over entries in row ic of RA_offd
+
+      /*--------------------------------------------------------------------
+       * Loop over entries in row ic of RA_diag.
+       *--------------------------------------------------------------------*/
+
+      for (jj1 = ra_row_begin_diag; jj1 < RA_diag.num_nonzeros; jj1++)
+      {
+         JXF_Int i1 = RA_diag.j[jj1 - ra_row_begin_diag];
+         JXF_Real r_a_product = RA_diag.data[jj1 - ra_row_begin_diag];
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of P_diag.
+          *-----------------------------------------------------------------*/
+         for (jj2 = P_diag_i[i1]; jj2 < P_diag_i[i1+1]; jj2++)
+         {
+            i2 = P_diag_j[jj2];
+            JXF_Real p_entry = P_diag_data[jj2];
+            JXF_Int marker = P_marker[i2];
+
+            /*--------------------------------------------------------
+             *  Check P_marker to see that RAP_{ic,i2} has not already
+             *  been accounted for. If it has not, create a new entry.
+             *  If it has, add new contribution.
+             *--------------------------------------------------------*/
+
+            if (marker < jj_row_begin_diag)
+            {
+               P_marker[i2] = jj_count_diag;
+               RAP_diag_data[jj_count_diag] = r_a_product * p_entry;
+               RAP_diag_j[jj_count_diag] = i2;
+               jj_count_diag++;
+            }
+            else
+            {
+               RAP_diag_data[marker] += r_a_product * p_entry;
+            }
+         }
+         if (num_cols_offd_P)
+         {
+            for (jj2 = P_offd_i[i1]; jj2 < P_offd_i[i1+1]; jj2++)
+            {
+               i2 = map_P_to_RAP[P_offd_j[jj2]] + num_cols_diag_P;
+               JXF_Real p_entry = P_offd_data[jj2];
+               JXF_Int marker = P_marker[i2];
+
+               /*--------------------------------------------------------
+                *  Check P_marker to see that RAP_{ic,i2} has not already
+                *  been accounted for. If it has not, create a new entry.
+                *  If it has, add new contribution.
+                *--------------------------------------------------------*/
+
+               if (marker < jj_row_begin_offd)
+               {
+                  P_marker[i2] = jj_count_offd;
+                  RAP_offd_data[jj_count_offd] = r_a_product * p_entry;
+                  RAP_offd_j[jj_count_offd] = i2 - num_cols_diag_P;
+                  jj_count_offd++;
+               }
+               else
+               {
+                  RAP_offd_data[marker] += r_a_product * p_entry;
+               }
+            }
+         } // num_cols_offd_P
+      } // loop over entries in row ic of RA_diag.
+   } // Loop over interior c-points.
+      jxf_TFree(P_mark_array[ii]);   
+      jxf_TFree(A_mark_array[ii]);
+      #ifdef JXF_MiniBranRAP
+      jxf_TFree(RAP_ext_marker);
+      #endif     
+   } // omp parallel for
+
+   /* check if really all off-diagonal entries occurring in col_map_offd_RAP
+	are represented and eliminate if necessary */
+
+   P_marker = jxf_CTAlloc(JXF_Int,num_cols_offd_RAP);
+
+#include "../../../include/jxf_smp_forloop.h"
+   for (i=0; i < num_cols_offd_RAP; i++)
+      P_marker[i] = -1;
+
+   jj_count_offd = 0;
+   for (i=0; i < RAP_offd_size; i++)
+   {
+      i3 = RAP_offd_j[i];
+      if (P_marker[i3])
+      {
+         P_marker[i3] = 0;
+         jj_count_offd++;
+      }
+   }
+
+   if (jj_count_offd < num_cols_offd_RAP)
+   {
+      new_col_map_offd_RAP = jxf_CTAlloc(JXF_Int,jj_count_offd);
+      jj_counter = 0;
+      for (i=0; i < num_cols_offd_RAP; i++)
+         if (!P_marker[i]) 
+         {
+	    P_marker[i] = jj_counter;
+	    new_col_map_offd_RAP[jj_counter++] = col_map_offd_RAP[i];
+         }
+ 
+#define JXF_SMP_PRIVATE i3
+#include "../../../include/jxf_smp_forloop.h"
+      for (i=0; i < RAP_offd_size; i++)
+      {
+	 i3 = RAP_offd_j[i];
+	 RAP_offd_j[i] = P_marker[i3];
+      }
+      
+      num_cols_offd_RAP = jj_count_offd;
+      jxf_TFree(col_map_offd_RAP);
+      col_map_offd_RAP = new_col_map_offd_RAP;
+   }
+   jxf_TFree(P_marker);
+
+   RAP = jxf_ParCSRMatrixCreate(comm, n_coarse_RT, n_coarse,
+                                  RT_partitioning, coarse_partitioning,
+                                  num_cols_offd_RAP, RAP_diag_size,
+                                  RAP_offd_size);
+
+
+/* Have RAP own coarse_partitioning instead of P */
+   jxf_ParCSRMatrixSetColStartsOwner(P,0);
+   jxf_ParCSRMatrixSetColStartsOwner(RT,0);
+
+   RAP_diag = jxf_ParCSRMatrixDiag(RAP);
+   jxf_CSRMatrixI(RAP_diag) = RAP_diag_i; 
+   if (RAP_diag_size)
+   {
+      jxf_CSRMatrixData(RAP_diag) = RAP_diag_data; 
+      jxf_CSRMatrixJ(RAP_diag) = RAP_diag_j; 
+   }
+
+   RAP_offd = jxf_ParCSRMatrixOffd(RAP);
+   jxf_CSRMatrixI(RAP_offd) = RAP_offd_i; 
+   if (num_cols_offd_RAP)
+   {
+        jxf_CSRMatrixData(RAP_offd) = RAP_offd_data; 
+        jxf_CSRMatrixJ(RAP_offd) = RAP_offd_j; 
+        jxf_ParCSRMatrixColMapOffd(RAP) = col_map_offd_RAP;
+   }
+   if (num_procs > 1)
+   {
+        jxf_MatvecCommPkgCreate(RAP); 
+   }
+
+   *RAP_ptr = RAP;
+
+   /*-----------------------------------------------------------------------
+    *  Free R, P_ext and marker arrays.
+    *-----------------------------------------------------------------------*/
+
+   if (keepTranspose)
+   {
+      jxf_ParCSRMatrixDiagT(RT) = R_diag;
+   }
+   else
+   {
+      jxf_CSRMatrixDestroy(R_diag);
+   }
+   R_diag = NULL;
+
+   if (num_cols_offd_RT) 
+   {
+      if (keepTranspose)
+      {
+         jxf_ParCSRMatrixOffdT(RT) = R_offd;
+      }
+      else
+      {
+         jxf_CSRMatrixDestroy(R_offd);
+      }
+      R_offd = NULL;
+   }
+
+   if (num_sends_RT || num_recvs_RT) 
+   {
+      jxf_CSRMatrixDestroy(RAP_ext);
+      RAP_ext = NULL;
+   }
+   jxf_TFree(P_mark_array);   
+   jxf_TFree(A_mark_array);
+   jxf_TFree(P_ext_diag_i);
+   jxf_TFree(P_ext_offd_i);
+   jxf_TFree(jj_cnt_diag);   
+   jxf_TFree(jj_cnt_offd);   
+   if (num_cols_offd_P)
+   {
+      jxf_TFree(map_P_to_Pext);
+      jxf_TFree(map_P_to_RAP);
+   }
+   if (num_cols_offd_Pext)
+   {
+      jxf_TFree(col_map_offd_Pext);
+      jxf_TFree(map_Pext_to_RAP);
+   }
+   if (P_ext_diag_size)
+   {
+      jxf_TFree(P_ext_diag_data);
+      jxf_TFree(P_ext_diag_j);
+   }
+   if (P_ext_offd_size)
+   {
+      jxf_TFree(P_ext_offd_data);
+      jxf_TFree(P_ext_offd_j);
+   }
+   jxf_TFree(RA_diag_data_array);
+   jxf_TFree(RA_diag_j_array);
+   if (num_cols_offd_A)
+   {
+      jxf_TFree(RA_offd_data_array);
+      jxf_TFree(RA_offd_j_array);
+   }
+
+   return(0);
+}
+
+/*!
+ * \fn int jxf_PAMGBuildCoarseOperatorKT_SplitRAP
+ * \brief Build the coarse operator in PAMG with MiniBranRAP and SplitRAP
+ * \date 2023/06/07
+ */
+
+JXF_Int
+jxf_PAMGBuildCoarseOperatorKT_SplitRAP( jxf_ParCSRMatrix  *RT,
+                                       jxf_ParCSRMatrix  *A,
+                                       jxf_ParCSRMatrix  *P,
+   	                                 JXF_Int            keepTranspose,
+                                       jxf_ParCSRMatrix **RAP_ptr )
+{
+   MPI_Comm        comm = jxf_ParCSRMatrixComm(A);
+
+   jxf_CSRMatrix *RT_diag = jxf_ParCSRMatrixDiag(RT);
+   jxf_CSRMatrix *RT_offd = jxf_ParCSRMatrixOffd(RT);
+   JXF_Int             num_cols_diag_RT = jxf_CSRMatrixNumCols(RT_diag);
+   JXF_Int             num_cols_offd_RT = jxf_CSRMatrixNumCols(RT_offd);
+   JXF_Int             num_rows_offd_RT = jxf_CSRMatrixNumRows(RT_offd);
+   jxf_ParCSRCommPkg   *comm_pkg_RT = jxf_ParCSRMatrixCommPkg(RT);
+   JXF_Int             num_recvs_RT = 0;
+   JXF_Int             num_sends_RT = 0;
+   JXF_Int             *send_map_starts_RT = NULL;
+   JXF_Int             *send_map_elmts_RT = NULL;
+
+   jxf_CSRMatrix *A_diag = jxf_ParCSRMatrixDiag(A);
+   
+   JXF_Real      *A_diag_data = jxf_CSRMatrixData(A_diag);
+   JXF_Int             *A_diag_i = jxf_CSRMatrixI(A_diag);
+   JXF_Int             *A_diag_j = jxf_CSRMatrixJ(A_diag);
+
+   jxf_CSRMatrix *A_offd = jxf_ParCSRMatrixOffd(A);
+   
+   JXF_Real      *A_offd_data = jxf_CSRMatrixData(A_offd);
+   JXF_Int             *A_offd_i = jxf_CSRMatrixI(A_offd);
+   JXF_Int             *A_offd_j = jxf_CSRMatrixJ(A_offd);
+
+   JXF_Int  num_cols_diag_A = jxf_CSRMatrixNumCols(A_diag);
+   JXF_Int  num_cols_offd_A = jxf_CSRMatrixNumCols(A_offd);
+
+   jxf_CSRMatrix *P_diag = jxf_ParCSRMatrixDiag(P);
+   
+   JXF_Real      *P_diag_data = jxf_CSRMatrixData(P_diag);
+   JXF_Int             *P_diag_i = jxf_CSRMatrixI(P_diag);
+   JXF_Int             *P_diag_j = jxf_CSRMatrixJ(P_diag);
+
+   jxf_CSRMatrix *P_offd = jxf_ParCSRMatrixOffd(P);
+   JXF_Int             *col_map_offd_P = jxf_ParCSRMatrixColMapOffd(P);
+   
+   JXF_Real      *P_offd_data = jxf_CSRMatrixData(P_offd);
+   JXF_Int             *P_offd_i = jxf_CSRMatrixI(P_offd);
+   JXF_Int             *P_offd_j = jxf_CSRMatrixJ(P_offd);
+
+   JXF_Int  first_col_diag_P = jxf_ParCSRMatrixFirstColDiag(P);
+   JXF_Int  last_col_diag_P;
+   JXF_Int  num_cols_diag_P = jxf_CSRMatrixNumCols(P_diag);
+   JXF_Int  num_cols_offd_P = jxf_CSRMatrixNumCols(P_offd);
+   JXF_Int *coarse_partitioning = jxf_ParCSRMatrixColStarts(P);
+   JXF_Int *RT_partitioning = jxf_ParCSRMatrixColStarts(RT);
+
+   jxf_ParCSRMatrix *RAP = NULL;
+   JXF_Int                *col_map_offd_RAP = NULL;
+   JXF_Int                *new_col_map_offd_RAP = NULL;
+
+   jxf_CSRMatrix *RAP_int = NULL;
+
+   JXF_Real      *RAP_int_data = NULL;
+   JXF_Int             *RAP_int_i = NULL;
+   JXF_Int             *RAP_int_j = NULL;
+
+   jxf_CSRMatrix *RAP_ext = NULL;
+
+   JXF_Real      *RAP_ext_data = NULL;
+   JXF_Int             *RAP_ext_i = NULL;
+   JXF_Int             *RAP_ext_j = NULL;
+
+   jxf_CSRMatrix *RAP_diag = NULL;
+
+   JXF_Real      *RAP_diag_data = NULL;
+   JXF_Int             *RAP_diag_i;
+   JXF_Int             *RAP_diag_j = NULL;
+
+   jxf_CSRMatrix *RAP_offd = NULL;
+
+   JXF_Real      *RAP_offd_data = NULL;
+   JXF_Int             *RAP_offd_i = NULL;
+   JXF_Int             *RAP_offd_j = NULL;
+
+   JXF_Int              RAP_size;
+   JXF_Int              RAP_ext_size;
+   JXF_Int              RAP_diag_size;
+   JXF_Int              RAP_offd_size;
+   JXF_Int              P_ext_diag_size;
+   JXF_Int              P_ext_offd_size;
+   JXF_Int              first_col_diag_RAP;
+   JXF_Int              last_col_diag_RAP;
+   JXF_Int              num_cols_offd_RAP = 0;
+   
+   jxf_CSRMatrix *R_diag = NULL;
+   
+   JXF_Real      *R_diag_data;
+   JXF_Int             *R_diag_i;
+   JXF_Int             *R_diag_j;
+
+   jxf_CSRMatrix *R_offd = NULL;
+   
+   JXF_Real          *R_offd_data = NULL;
+   JXF_Int             *R_offd_i    = NULL;
+   JXF_Int             *R_offd_j    = NULL;
+
+   jxf_CSRMatrix *Ps_ext = NULL;
+   
+   JXF_Real      *Ps_ext_data = NULL;
+   JXF_Int             *Ps_ext_i = NULL;
+   JXF_Int             *Ps_ext_j = NULL;
+
+   JXF_Real      *P_ext_diag_data = NULL;
+   JXF_Int             *P_ext_diag_i = NULL;
+   JXF_Int             *P_ext_diag_j = NULL;
+
+   JXF_Real      *P_ext_offd_data = NULL;
+   JXF_Int             *P_ext_offd_i = NULL;
+   JXF_Int             *P_ext_offd_j = NULL;
+
+   JXF_Int             *col_map_offd_Pext = NULL;
+   JXF_Int             *map_P_to_Pext = NULL;
+   JXF_Int             *map_P_to_RAP = NULL;
+   JXF_Int             *map_Pext_to_RAP = NULL;
+
+   JXF_Int             *P_marker = NULL;
+   JXF_Int            **P_mark_array;
+   JXF_Int             *temp = NULL;
+
+   JXF_Int              n_coarse, n_coarse_RT;
+   JXF_Int              square = 1;
+   JXF_Int              num_cols_offd_Pext = 0;
+   
+   JXF_Int              ic, i, j, k;
+   JXF_Int              i1, i2, i3, ii, ns, ne, size, rest;
+   JXF_Int              cnt = 0; /*value; */
+   JXF_Int              jj1, jj2, jcol;
+   
+   JXF_Int             *jj_count, *jj_cnt_diag, *jj_cnt_offd;
+   JXF_Int              jj_counter, jj_count_diag, jj_count_offd;
+   JXF_Int              jj_row_begining, jj_row_begin_diag, jj_row_begin_offd;
+   JXF_Int              start_indexing = 0; /* start indexing for RAP_data at 0 */
+   JXF_Int              num_procs;
+   JXF_Int              num_threads;
+
+   JXF_Real       r_entry;
+   JXF_Real       r_a_p_product;
+   
+   JXF_Real       zero = 0.0;
+   JXF_Int 	   *prefix_sum_workspace;
+
+   JXF_Int      *RAP_ext_marker = NULL;
+
+   JXF_Real     *AP_diag_data = NULL;
+   JXF_Int      *AP_diag_i = NULL;
+   JXF_Int      *AP_diag_j = NULL;
+
+   JXF_Real     *AP_offd_data = NULL;
+   JXF_Int      *AP_offd_i = NULL;
+   JXF_Int      *AP_offd_j = NULL;
+
+   JXF_Int       AP_diag_size = 0;
+   JXF_Int       AP_offd_size = 0;
+   #if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0
+   char timetag[80];
+   #endif
+
+   /*-----------------------------------------------------------------------
+    *  Copy ParCSRMatrix RT into CSRMatrix R so that we have row-wise access 
+    *  to restriction .
+    *-----------------------------------------------------------------------*/
+
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0
+   jxf_sprintf(timetag,"%s_l%d", "CopyParCRT2CR", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+
+   jxf_MPI_Comm_size(comm,&num_procs);
+   num_threads = jxf_NumThreads();
+
+   if (comm_pkg_RT)
+   {
+        num_recvs_RT = jxf_ParCSRCommPkgNumRecvs(comm_pkg_RT);
+        num_sends_RT = jxf_ParCSRCommPkgNumSends(comm_pkg_RT);
+        send_map_starts_RT =jxf_ParCSRCommPkgSendMapStarts(comm_pkg_RT);
+        send_map_elmts_RT = jxf_ParCSRCommPkgSendMapElmts(comm_pkg_RT);
+   }
+   else if (num_procs > 1)
+   {
+        jxf_MatvecCommPkgCreate(RT);
+        comm_pkg_RT = jxf_ParCSRMatrixCommPkg(RT);
+        num_recvs_RT = jxf_ParCSRCommPkgNumRecvs(comm_pkg_RT);
+        num_sends_RT = jxf_ParCSRCommPkgNumSends(comm_pkg_RT);
+        send_map_starts_RT =jxf_ParCSRCommPkgSendMapStarts(comm_pkg_RT);
+        send_map_elmts_RT = jxf_ParCSRCommPkgSendMapElmts(comm_pkg_RT);
+   }
+
+   jxf_CSRMatrixTranspose(RT_diag,&R_diag,1); 
+   if (num_cols_offd_RT) 
+   {
+        jxf_CSRMatrixTranspose(RT_offd,&R_offd,1); 
+        R_offd_data = jxf_CSRMatrixData(R_offd);
+        R_offd_i    = jxf_CSRMatrixI(R_offd);
+        R_offd_j    = jxf_CSRMatrixJ(R_offd);
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Access the CSR vectors for R. Also get sizes of fine and
+    *  coarse grids.
+    *-----------------------------------------------------------------------*/
+
+   R_diag_data = jxf_CSRMatrixData(R_diag);
+   R_diag_i    = jxf_CSRMatrixI(R_diag);
+   R_diag_j    = jxf_CSRMatrixJ(R_diag);
+
+   n_coarse = jxf_ParCSRMatrixGlobalNumCols(P);
+
+   n_coarse_RT = jxf_ParCSRMatrixGlobalNumCols(RT);
+   if (n_coarse != n_coarse_RT)
+      square = 0;
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0
+   jxf_sprintf(timetag,"%s_l%d", "CopyParCRT2CR", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+   /*-----------------------------------------------------------------------
+    *  Generate Ps_ext, i.e. portion of P that is stored on neighbor procs
+    *  and needed locally for triple matrix product 
+    *-----------------------------------------------------------------------*/
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "GetPext", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+   if (num_procs > 1) 
+   {
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "Comm", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+        Ps_ext = jxf_ParCSRMatrixExtractBExt(P,A,1);
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "Comm", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+        Ps_ext_data = jxf_CSRMatrixData(Ps_ext);
+        Ps_ext_i    = jxf_CSRMatrixI(Ps_ext);
+        Ps_ext_j    = jxf_CSRMatrixJ(Ps_ext);
+   }
+   P_ext_diag_i = jxf_TAlloc(JXF_Int,num_cols_offd_A+1);
+   P_ext_offd_i = jxf_TAlloc(JXF_Int,num_cols_offd_A+1);
+   P_ext_diag_i[0] = 0;
+   P_ext_offd_i[0] = 0;
+   P_ext_diag_size = 0;
+   P_ext_offd_size = 0;
+   last_col_diag_P = first_col_diag_P + num_cols_diag_P - 1;
+
+   /*JXF_Int prefix_sum_workspace[2*(num_threads + 1)];*/
+   prefix_sum_workspace = jxf_TAlloc(JXF_Int, 2*(num_threads + 1));
+
+#define JXF_SMP_PRIVATE i,j
+#define JXF_SMP_PAR_REGION
+#include "../../../include/jxf_smp_forloop.h"
+   {
+      JXF_Int i_begin, i_end;
+      jxf_GetSimpleThreadPartition(&i_begin, &i_end, num_cols_offd_A);
+
+      JXF_Int P_ext_diag_size_private = 0;
+      JXF_Int P_ext_offd_size_private = 0;
+
+      for (i = i_begin; i < i_end; i++)
+      {
+         for (j=Ps_ext_i[i]; j < Ps_ext_i[i+1]; j++)
+            if (Ps_ext_j[j] < first_col_diag_P || Ps_ext_j[j] > last_col_diag_P)
+               P_ext_offd_size_private++;
+            else
+               P_ext_diag_size_private++;
+      }
+
+      jxf_prefix_sum_pair(&P_ext_diag_size_private, &P_ext_diag_size, &P_ext_offd_size_private, &P_ext_offd_size, prefix_sum_workspace);
+
+#define JXF_SMP_MASTER
+#include "../../../include/jxf_smp_forloop.h"
+      {
+         if (P_ext_diag_size)
+         {
+            P_ext_diag_j = jxf_CTAlloc(JXF_Int, P_ext_diag_size);
+            P_ext_diag_data = jxf_CTAlloc(JXF_Real, P_ext_diag_size);
+         }
+         if (P_ext_offd_size)
+         {
+            P_ext_offd_j = jxf_CTAlloc(JXF_Int, P_ext_offd_size);
+            P_ext_offd_data = jxf_CTAlloc(JXF_Real, P_ext_offd_size);
+         }
+      }
+#define JXF_SMP_BARRIER
+#include "../../../include/jxf_smp_forloop.h"
+
+      for (i = i_begin; i < i_end; i++)
+      {
+         for (j=Ps_ext_i[i]; j < Ps_ext_i[i+1]; j++)
+         {
+            if (Ps_ext_j[j] < first_col_diag_P || Ps_ext_j[j] > last_col_diag_P)
+            {
+               P_ext_offd_j[P_ext_offd_size_private] = Ps_ext_j[j];
+               P_ext_offd_data[P_ext_offd_size_private++] = Ps_ext_data[j];
+            }
+            else
+            {
+               P_ext_diag_j[P_ext_diag_size_private] = Ps_ext_j[j] - first_col_diag_P;
+               P_ext_diag_data[P_ext_diag_size_private++] = Ps_ext_data[j];
+            }
+         }
+         P_ext_diag_i[i+1] = P_ext_diag_size_private;
+         P_ext_offd_i[i+1] = P_ext_offd_size_private;
+      }
+   } /* omp parallel */
+   jxf_TFree(prefix_sum_workspace);
+
+   if (num_procs > 1) 
+   {
+      jxf_CSRMatrixDestroy(Ps_ext);
+      Ps_ext = NULL;
+   }
+
+   if (P_ext_offd_size || num_cols_offd_P)
+   {
+      temp = jxf_CTAlloc(JXF_Int, P_ext_offd_size+num_cols_offd_P);
+      for (i=0; i < P_ext_offd_size; i++)
+         temp[i] = P_ext_offd_j[i];
+      cnt = P_ext_offd_size;
+      for (i=0; i < num_cols_offd_P; i++)
+         temp[cnt++] = col_map_offd_P[i];
+   }
+   if (cnt)
+   {
+      JXF_Int value;
+      jxf_qsort0(temp, 0, cnt-1);
+
+      num_cols_offd_Pext = 1;
+      value = temp[0];
+      for (i=1; i < cnt; i++)
+      {
+         if (temp[i] > value)
+         {
+            value = temp[i];
+            temp[num_cols_offd_Pext++] = value;
+         }
+      }
+   }
+ 
+   if (num_cols_offd_Pext)
+        col_map_offd_Pext = jxf_CTAlloc(JXF_Int,num_cols_offd_Pext);
+
+   for (i=0; i < num_cols_offd_Pext; i++)
+      col_map_offd_Pext[i] = temp[i];
+
+   if (P_ext_offd_size || num_cols_offd_P)
+      jxf_TFree(temp);
+
+   for (i=0 ; i < P_ext_offd_size; i++)
+      P_ext_offd_j[i] = jxf_BinarySearch(col_map_offd_Pext,
+                                           P_ext_offd_j[i],
+                                           num_cols_offd_Pext);
+   if (num_cols_offd_P)
+   {
+      map_P_to_Pext = jxf_CTAlloc(JXF_Int,num_cols_offd_P);
+
+      cnt = 0;
+      for (i=0; i < num_cols_offd_Pext; i++)
+         if (col_map_offd_Pext[i] == col_map_offd_P[cnt])
+         {
+            map_P_to_Pext[cnt++] = i;
+            if (cnt == num_cols_offd_P) break;
+         }
+   }
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "GetPext", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+   /*-----------------------------------------------------------------------
+    *  First Pass: Determine size of RAP_int and set up RAP_int_i if there 
+    *  are more than one processor and nonzero elements in R_offd
+    *-----------------------------------------------------------------------*/
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0
+   jxf_sprintf(timetag,"%s_l%d", "SetRAPint", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+  P_mark_array = jxf_CTAlloc(JXF_Int *, num_threads);
+  jj_cnt_diag = jxf_CTAlloc(JXF_Int, num_threads);
+  jj_cnt_offd = jxf_CTAlloc(JXF_Int, num_threads);
+
+#define JXF_SMP_PRIVATE ii,ic,i1,i2,jj1,jj2,ns,ne,size,rest,jj_count_diag,jj_count_offd,jj_row_begin_diag,jj_row_begin_offd,P_marker
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_diag_A/num_threads;
+     rest = num_cols_diag_A - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+     P_marker = NULL;
+     if (num_cols_offd_Pext || num_cols_diag_P)
+     {
+        P_mark_array[ii] = jxf_CTAlloc(JXF_Int, num_cols_diag_P+num_cols_offd_Pext);
+        P_marker = P_mark_array[ii];
+     }
+     jj_count_diag = start_indexing;
+     jj_count_offd = start_indexing;
+     for (ic = 0; ic < num_cols_diag_P+num_cols_offd_Pext; ic++)
+     {      
+        P_marker[ic] = -1;
+     }
+     for (ic = ns;ic < ne;ic++)
+     {
+        jj_row_begin_diag = jj_count_diag;
+        jj_row_begin_offd = jj_count_offd;
+        if (num_cols_offd_A)
+        {
+           for (jj1 = A_offd_i[ic]; jj1 < A_offd_i[ic+1]; jj1++)
+           {
+              i1 = A_offd_j[jj1];
+              for (jj2 = P_ext_diag_i[i1]; jj2 < P_ext_diag_i[i1+1]; jj2++)
+              {
+                 i2 = P_ext_diag_j[jj2];
+                 if (P_marker[i2] < jj_row_begin_diag)
+                 {
+                    P_marker[i2] = jj_count_diag;
+                    jj_count_diag++;
+                 }
+              }
+              for (jj2 = P_ext_offd_i[i1]; jj2 < P_ext_offd_i[i1+1]; jj2++)
+              {
+                 i2 = P_ext_offd_j[jj2]+num_cols_diag_P;
+                 if (P_marker[i2] < jj_row_begin_offd)
+                 {
+                    P_marker[i2] = jj_count_offd;
+                    jj_count_offd++;
+                 }
+              }
+           }
+        }
+        for (jj1 = A_diag_i[ic]; jj1 < A_diag_i[ic+1]; jj1++)
+        {
+           i1 = A_diag_j[jj1];
+           for (jj2 = P_diag_i[i1]; jj2 < P_diag_i[i1+1]; jj2++)
+           {
+              i2 = P_diag_j[jj2];
+              if (P_marker[i2] < jj_row_begin_diag)
+              {
+                 P_marker[i2] = jj_count_diag;
+                 jj_count_diag++;
+              } 
+           }
+              for (jj2 = P_offd_i[i1]; jj2 < P_offd_i[i1+1]; jj2++)
+              {
+                 i2 = map_P_to_Pext[P_offd_j[jj2]] + num_cols_diag_P;
+                 if (P_marker[i2] < jj_row_begin_offd)
+                 {
+                    P_marker[i2] = jj_count_offd;
+                    jj_count_offd++;
+                 }
+              }
+        }    
+        jj_cnt_diag[ii] = jj_count_diag;
+        jj_cnt_offd[ii] = jj_count_offd;
+     }
+   }
+for (i = 0; i < num_threads-1; i++)
+{
+   jj_cnt_diag[i+1] += jj_cnt_diag[i];
+   jj_cnt_offd[i+1] += jj_cnt_offd[i];
+}
+AP_diag_size = jj_cnt_diag[num_threads-1];
+AP_diag_i = jxf_CTAlloc(JXF_Int, num_cols_diag_A+1);
+AP_diag_data = jxf_CTAlloc(JXF_Real, AP_diag_size);
+AP_diag_j    = jxf_CTAlloc(JXF_Int, AP_diag_size);
+AP_diag_i[num_cols_diag_A] = AP_diag_size;
+
+AP_offd_size = jj_cnt_offd[num_threads-1];
+AP_offd_i = jxf_CTAlloc(JXF_Int, num_cols_diag_A+1);
+AP_offd_data = jxf_CTAlloc(JXF_Real, AP_offd_size);
+AP_offd_j    = jxf_CTAlloc(JXF_Int, AP_offd_size);
+AP_offd_i[num_cols_diag_A] = AP_offd_size;
+
+
+#define JXF_SMP_PRIVATE ii,ic,i1,i2,jj1,jj2,ns,ne,size,rest,jj_count_diag,jj_count_offd,jj_row_begin_diag,jj_row_begin_offd,P_marker
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_diag_A/num_threads;
+     rest = num_cols_diag_A - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+     P_marker = NULL;
+     if (num_cols_offd_Pext || num_cols_diag_P)
+     {
+        P_marker = P_mark_array[ii];
+     }
+     jj_count_diag = start_indexing;
+     jj_count_offd = start_indexing;
+     for (ic = 0; ic < num_cols_diag_P+num_cols_offd_Pext; ic++)
+     {      
+        P_marker[ic] = -1;
+     }
+     for (ic = ns;ic < ne;ic++)
+     {
+        jj_row_begin_diag = jj_count_diag;
+        jj_row_begin_offd = jj_count_offd;
+        AP_diag_i[ic] = jj_row_begin_diag;
+        AP_offd_i[ic] = jj_row_begin_offd;
+        if (num_cols_offd_A)
+        {
+           for (jj1 = A_offd_i[ic]; jj1 < A_offd_i[ic+1]; jj1++)
+           {
+              i1 = A_offd_j[jj1];
+              for (jj2 = P_ext_diag_i[i1]; jj2 < P_ext_diag_i[i1+1]; jj2++)
+              {
+                 i2 = P_ext_diag_j[jj2];
+                 if (P_marker[i2] < jj_row_begin_diag)
+                 {
+                    P_marker[i2] = jj_count_diag;
+                    AP_diag_data[jj_count_diag] = A_offd_data[jj1] * P_ext_diag_data[jj2];
+                    AP_diag_j[jj_count_diag] = i2;
+                    jj_count_diag++;
+                 }
+                 else
+                 {
+                    AP_diag_data[P_marker[i2]] += A_offd_data[jj1] * P_ext_diag_data[jj2];
+                 }
+              }
+              for (jj2 = P_ext_offd_i[i1]; jj2 < P_ext_offd_i[i1+1]; jj2++)
+              {
+                 i2 = P_ext_offd_j[jj2]+num_cols_diag_P;
+                 if (P_marker[i2] < jj_row_begin_offd)
+                 {
+                    P_marker[i2] = jj_count_offd;
+                    AP_offd_data[jj_count_offd] = A_offd_data[jj1] * P_ext_offd_data[jj2];
+                    AP_offd_j[jj_count_offd] = i2 - num_cols_diag_P;
+                    jj_count_offd++;
+                 }
+                 else
+                 {
+                    AP_offd_data[P_marker[i2]] += A_offd_data[jj1] * P_ext_offd_data[jj2];
+                 }
+              }
+           }
+        }
+        for (jj1 = A_diag_i[ic]; jj1 < A_diag_i[ic+1]; jj1++)
+        {
+           i1 = A_diag_j[jj1];
+           for (jj2 = P_diag_i[i1]; jj2 < P_diag_i[i1+1]; jj2++)
+           {
+              i2 = P_diag_j[jj2];
+              if (P_marker[i2] < jj_row_begin_diag)
+              {
+                 P_marker[i2] = jj_count_diag;
+                 AP_diag_data[jj_count_diag] = A_diag_data[jj1] * P_diag_data[jj2];
+                 AP_diag_j[jj_count_diag] = i2;
+                 jj_count_diag++;
+              }
+              else
+              {
+                 AP_diag_data[P_marker[i2]] += A_diag_data[jj1] * P_diag_data[jj2];
+              } 
+           }
+              for (jj2 = P_offd_i[i1]; jj2 < P_offd_i[i1+1]; jj2++)
+              {
+                 i2 = map_P_to_Pext[P_offd_j[jj2]] + num_cols_diag_P;
+                 if (P_marker[i2] < jj_row_begin_offd)
+                 {
+                    P_marker[i2] = jj_count_offd;
+                    AP_offd_data[jj_count_offd] = A_diag_data[jj1] * P_offd_data[jj2];
+                    AP_offd_j[jj_count_offd] = i2 - num_cols_diag_P;
+                    jj_count_offd++;
+                 }
+                 else
+                 {
+                    AP_offd_data[P_marker[i2]] += A_diag_data[jj1] * P_offd_data[jj2];
+                 }
+              }
+        }    
+        jj_cnt_diag[ii] = jj_count_diag;
+        jj_cnt_offd[ii] = jj_count_offd;
+     }
+     if (num_cols_offd_Pext || num_cols_diag_P)
+        jxf_TFree(P_mark_array[ii]);
+   }
+
+  if (num_cols_offd_RT)
+  {
+   jj_count = jxf_CTAlloc(JXF_Int, num_threads);
+
+#define JXF_SMP_PRIVATE ii,ic,i1,i2,jj1,jj2,ns,ne,size,rest,jj_counter,jj_row_begining,P_marker
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_offd_RT/num_threads;
+     rest = num_cols_offd_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+   
+   /*-----------------------------------------------------------------------
+    *  Allocate marker arrays.
+    *-----------------------------------------------------------------------*/
+
+   P_marker = NULL;
+   if (num_cols_offd_Pext || num_cols_diag_P)
+   {
+      P_mark_array[ii] = jxf_CTAlloc(JXF_Int, num_cols_diag_P+num_cols_offd_Pext);
+      P_marker = P_mark_array[ii];
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+
+   jj_counter = start_indexing;
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_Pext; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Loop over exterior c-points
+    *-----------------------------------------------------------------------*/
+    
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      jj_row_begining = jj_counter;
+
+      /*--------------------------------------------------------------------
+       *  Loop over entries in row ic of R_offd.
+       *--------------------------------------------------------------------*/
+   
+      for (jj1 = R_offd_i[ic]; jj1 < R_offd_i[ic+1]; jj1++)
+      {
+         i1  = R_offd_j[jj1];
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_offd.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = AP_offd_i[i1]; jj2 < AP_offd_i[i1+1]; jj2++)
+         {
+            i2 = AP_offd_j[jj2]+num_cols_diag_P;
+
+            if (P_marker[i2] < jj_row_begining)
+            {
+                P_marker[i2] = jj_counter;
+                jj_counter++;
+            }
+         }
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_diag.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = AP_diag_i[i1]; jj2 < AP_diag_i[i1+1]; jj2++)
+         {
+            i2 = AP_diag_j[jj2];
+                  
+            /*--------------------------------------------------------
+            *  Check P_marker to see that RAP_{ic,i3} has not already
+            *  been accounted for. If it has not, mark it and increment
+            *  counter.
+            *--------------------------------------------------------*/
+
+            if (P_marker[i2] < jj_row_begining)
+            {
+            	P_marker[i2] = jj_counter;
+                jj_counter++;
+            }
+         }
+      }
+    }
+
+    jj_count[ii] = jj_counter;
+
+   }
+  
+   /*-----------------------------------------------------------------------
+    *  Allocate RAP_int_data and RAP_int_j arrays.
+    *-----------------------------------------------------------------------*/
+   for (i = 0; i < num_threads-1; i++)
+      jj_count[i+1] += jj_count[i];
+    
+   RAP_size = jj_count[num_threads-1];
+   RAP_int_i = jxf_CTAlloc(JXF_Int, num_cols_offd_RT+1);
+   RAP_int_data = jxf_CTAlloc(JXF_Real, RAP_size);
+   RAP_int_j    = jxf_CTAlloc(JXF_Int, RAP_size);
+
+   RAP_int_i[num_cols_offd_RT] = RAP_size;
+
+   /*-----------------------------------------------------------------------
+    *  Second Pass: Fill in RAP_int_data and RAP_int_j.
+    *-----------------------------------------------------------------------*/
+
+#define JXF_SMP_PRIVATE ii,ic,i1,i2,jj1,jj2,ns,ne,size,rest,jj_counter,jj_row_begining,P_marker,r_entry,r_a_p_product
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_offd_RT/num_threads;
+     rest = num_cols_offd_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+   P_marker = NULL;
+   if (num_cols_offd_Pext || num_cols_diag_P)
+      P_marker = P_mark_array[ii];
+   // A_marker = A_mark_array[ii];
+
+   jj_counter = start_indexing;
+   if (ii > 0) jj_counter = jj_count[ii-1];
+
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_Pext; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+   
+   /*-----------------------------------------------------------------------
+    *  Loop over exterior c-points.
+    *-----------------------------------------------------------------------*/
+    
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      jj_row_begining = jj_counter;
+      RAP_int_i[ic] = jj_counter;
+
+      /*--------------------------------------------------------------------
+       *  Loop over entries in row ic of R_offd.
+       *--------------------------------------------------------------------*/
+   
+      for (jj1 = R_offd_i[ic]; jj1 < R_offd_i[ic+1]; jj1++)
+      {
+         i1  = R_offd_j[jj1];
+         r_entry = R_offd_data[jj1];
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_offd.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = AP_offd_i[i1]; jj2 < AP_offd_i[i1+1]; jj2++)
+         {
+            i2 = AP_offd_j[jj2] + num_cols_diag_P;
+            r_a_p_product = r_entry * AP_offd_data[jj2];
+                  
+            /*--------------------------------------------------------
+            *  Check P_marker to see that RAP_{ic,i3} has not already
+            *  been accounted for. If it has not, create a new entry.
+            *  If it has, add new contribution.
+            *--------------------------------------------------------*/
+
+            if (P_marker[i2] < jj_row_begining)
+            {
+                P_marker[i2] = jj_counter;
+                RAP_int_data[jj_counter] = r_a_p_product;
+                RAP_int_j[jj_counter] = col_map_offd_Pext[i2 - num_cols_diag_P];// i3 + first_col_diag_P;
+                jj_counter++;
+            }
+            else
+            {
+                RAP_int_data[P_marker[i2]] += r_a_p_product;
+            }
+        }
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_diag.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = AP_diag_i[i1]; jj2 < AP_diag_i[i1+1]; jj2++)
+         {
+            i2 = AP_diag_j[jj2];
+            r_a_p_product = r_entry * AP_diag_data[jj2];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, create a new entry.
+                   *  If it has, add new contribution.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i2] < jj_row_begining)
+                  {
+                     P_marker[i2] = jj_counter;
+                     RAP_int_data[jj_counter] = r_a_p_product;
+                     RAP_int_j[jj_counter] = i2 + first_col_diag_P;
+                     jj_counter++;
+                  }
+                  else
+                  {
+                     RAP_int_data[P_marker[i2]] += r_a_p_product;
+                  }
+         }
+      }
+   }
+   if (num_cols_offd_Pext || num_cols_diag_P)
+      jxf_TFree(P_mark_array[ii]);
+   }
+
+   RAP_int = jxf_CSRMatrixCreate(num_cols_offd_RT,num_rows_offd_RT,RAP_size);
+   jxf_CSRMatrixI(RAP_int) = RAP_int_i;
+   jxf_CSRMatrixJ(RAP_int) = RAP_int_j;
+   jxf_CSRMatrixData(RAP_int) = RAP_int_data;
+   jxf_TFree(jj_count);
+  }
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0
+   jxf_sprintf(timetag,"%s_l%d", "SetRAPint", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0
+   jxf_sprintf(timetag,"%s_l%d", "SetRAPext", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+   RAP_ext_size = 0;
+   if (num_sends_RT || num_recvs_RT)
+   {
+        RAP_ext = jxf_ExchangeRAPData(RAP_int,comm_pkg_RT);
+        RAP_ext_i = jxf_CSRMatrixI(RAP_ext);
+        RAP_ext_j = jxf_CSRMatrixJ(RAP_ext);
+        RAP_ext_data = jxf_CSRMatrixData(RAP_ext);
+        RAP_ext_size = RAP_ext_i[jxf_CSRMatrixNumRows(RAP_ext)];
+   }
+   if (num_cols_offd_RT)
+   {
+      jxf_CSRMatrixDestroy(RAP_int);
+      RAP_int = NULL;
+   }
+ 
+   RAP_diag_i = jxf_TAlloc(JXF_Int, num_cols_diag_RT+1);
+   RAP_offd_i = jxf_TAlloc(JXF_Int, num_cols_diag_RT+1);
+
+   first_col_diag_RAP = first_col_diag_P;
+   last_col_diag_RAP = first_col_diag_P + num_cols_diag_P - 1;
+
+   /*-----------------------------------------------------------------------
+    *  check for new nonzero columns in RAP_offd generated through RAP_ext
+    *-----------------------------------------------------------------------*/
+
+   if (RAP_ext_size || num_cols_offd_Pext)
+   {
+      temp = jxf_CTAlloc(JXF_Int,RAP_ext_size+num_cols_offd_Pext);
+      cnt = 0;
+      for (i=0; i < RAP_ext_size; i++)
+         if (RAP_ext_j[i] < first_col_diag_RAP 
+                        || RAP_ext_j[i] > last_col_diag_RAP)
+            temp[cnt++] = RAP_ext_j[i];
+      for (i=0; i < num_cols_offd_Pext; i++)
+         temp[cnt++] = col_map_offd_Pext[i];
+
+
+      if (cnt)
+      {
+         JXF_Int value;
+         jxf_qsort0(temp,0,cnt-1);
+         value = temp[0];
+         num_cols_offd_RAP = 1;
+         for (i=1; i < cnt; i++)
+         {
+            if (temp[i] > value)
+            {
+               value = temp[i];
+               temp[num_cols_offd_RAP++] = value;
+            }
+         }
+      }
+
+   /* now evaluate col_map_offd_RAP */
+      if (num_cols_offd_RAP)
+         col_map_offd_RAP = jxf_CTAlloc(JXF_Int, num_cols_offd_RAP);
+
+      for (i=0 ; i < num_cols_offd_RAP; i++)
+         col_map_offd_RAP[i] = temp[i];
+  
+      jxf_TFree(temp);
+   }
+
+   if (num_cols_offd_P)
+   {
+      map_P_to_RAP = jxf_TAlloc(JXF_Int,num_cols_offd_P);
+
+      cnt = 0;
+      for (i=0; i < num_cols_offd_RAP; i++)
+         if (col_map_offd_RAP[i] == col_map_offd_P[cnt])
+         {
+            map_P_to_RAP[cnt++] = i;
+            if (cnt == num_cols_offd_P) break;
+         }
+   }
+
+   if (num_cols_offd_Pext)
+   {
+      map_Pext_to_RAP = jxf_TAlloc(JXF_Int,num_cols_offd_Pext);
+
+      cnt = 0;
+      for (i=0; i < num_cols_offd_RAP; i++)
+         if (col_map_offd_RAP[i] == col_map_offd_Pext[cnt])
+         {
+            map_Pext_to_RAP[cnt++] = i;
+            if (cnt == num_cols_offd_Pext) break;
+         }
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Convert RAP_ext column indices
+    *-----------------------------------------------------------------------*/
+
+#include "../../../include/jxf_smp_forloop.h"
+   for (i=0; i < RAP_ext_size; i++)
+      if (RAP_ext_j[i] < first_col_diag_RAP 
+                        || RAP_ext_j[i] > last_col_diag_RAP)
+            RAP_ext_j[i] = num_cols_diag_P
+                                + jxf_BinarySearch(col_map_offd_RAP,
+                                                RAP_ext_j[i],num_cols_offd_RAP);
+      else
+            RAP_ext_j[i] -= first_col_diag_RAP;
+
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0
+   jxf_sprintf(timetag,"%s_l%d", "SetRAPext", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+/*   need to allocate new P_marker etc. and make further changes */
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "SetPmarker", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+
+#define JXF_SMP_PRIVATE i,j,k,jcol,ii,ic,i1,i2,jj1,jj2,ns,ne,size,rest,jj_count_diag,jj_count_offd,jj_row_begin_diag,jj_row_begin_offd,P_marker
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_diag_RT/num_threads;
+     rest = num_cols_diag_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+
+   P_mark_array[ii] = jxf_CTAlloc(JXF_Int, num_cols_diag_P+num_cols_offd_RAP);
+   P_marker = P_mark_array[ii];
+   jj_count_diag = start_indexing;
+   jj_count_offd = start_indexing;
+
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_RAP; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+
+   RAP_ext_marker = jxf_CTAlloc(JXF_Int, num_sends_RT);
+   for (i = 0;i < num_sends_RT;i++)
+      RAP_ext_marker[i] = send_map_starts_RT[i];
+   /*-----------------------------------------------------------------------
+    *  Loop over interior c-points.
+    *-----------------------------------------------------------------------*/
+   
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      /*--------------------------------------------------------------------
+       *  Set marker for diagonal entry, RAP_{ic,ic}. and for all points
+       *  being added to row ic of RAP_diag and RAP_offd through RAP_ext
+       *--------------------------------------------------------------------*/
+      jj_row_begin_diag = jj_count_diag;
+      jj_row_begin_offd = jj_count_offd;
+
+      if (square)
+         P_marker[ic] = jj_count_diag++;
+     for (i=0; i < num_sends_RT; i++)
+        for (j = RAP_ext_marker[i]; j < send_map_starts_RT[i+1]; j++)
+        {   
+            if (send_map_elmts_RT[j] < ic)
+               RAP_ext_marker[i]++;
+            else
+            if (send_map_elmts_RT[j] == ic)
+            {   
+                for (k=RAP_ext_i[j]; k < RAP_ext_i[j+1]; k++)
+                {
+                  jcol = RAP_ext_j[k];
+                  if (jcol < num_cols_diag_P)
+                  {
+                        if (P_marker[jcol] < jj_row_begin_diag)
+                        {
+                           P_marker[jcol] = jj_count_diag;
+                           jj_count_diag++;
+                        }
+                  }
+                  else
+                  {
+                        if (P_marker[jcol] < jj_row_begin_offd)
+                        {
+                              P_marker[jcol] = jj_count_offd;
+                              jj_count_offd++;
+                        }
+                  }
+                }
+                RAP_ext_marker[i]++;
+                break;
+            }
+         else
+            break;
+        }
+
+      /*--------------------------------------------------------------------
+       *  Loop over entries in row ic of R_diag.
+       *--------------------------------------------------------------------*/
+   
+      for (jj1 = R_diag_i[ic]; jj1 < R_diag_i[ic+1]; jj1++)
+      {
+         i1  = R_diag_j[jj1];
+ 
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_offd.
+          *-----------------------------------------------------------------*/
+         
+         if (num_cols_offd_A)
+         {
+           for (jj2 = AP_offd_i[i1]; jj2 < AP_offd_i[i1+1]; jj2++)
+           {
+                  i2 = map_Pext_to_RAP[AP_offd_j[jj2]]+num_cols_diag_P;
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+
+                  if (P_marker[i2] < jj_row_begin_offd)
+                  {
+                     P_marker[i2] = jj_count_offd;
+                     jj_count_offd++;
+                  }
+           }
+         }
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of A_diag.
+          *-----------------------------------------------------------------*/
+         
+         for (jj2 = AP_diag_i[i1]; jj2 < AP_diag_i[i1+1]; jj2++)
+         {
+                  i2 = AP_diag_j[jj2];
+                  
+                  /*--------------------------------------------------------
+                   *  Check P_marker to see that RAP_{ic,i3} has not already
+                   *  been accounted for. If it has not, mark it and increment
+                   *  counter.
+                   *--------------------------------------------------------*/
+ 
+                  if (P_marker[i2] < jj_row_begin_diag)
+                  {
+                     P_marker[i2] = jj_count_diag;
+                     jj_count_diag++;
+                  }
+         }
+      }
+    }
+    jj_cnt_diag[ii] = jj_count_diag;
+    jj_cnt_offd[ii] = jj_count_offd;
+   }
+
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "SetPmarker", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "SetRAP", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+
+   for (i=0; i < num_threads-1; i++)
+   {
+      jj_cnt_diag[i+1] += jj_cnt_diag[i];
+      jj_cnt_offd[i+1] += jj_cnt_offd[i];
+   }
+
+   jj_count_diag = jj_cnt_diag[num_threads-1];
+   jj_count_offd = jj_cnt_offd[num_threads-1];
+
+   RAP_diag_i[num_cols_diag_RT] = jj_count_diag;
+   RAP_offd_i[num_cols_diag_RT] = jj_count_offd;
+ 
+   /*-----------------------------------------------------------------------
+    *  Allocate RAP_diag_data and RAP_diag_j arrays.
+    *  Allocate RAP_offd_data and RAP_offd_j arrays.
+    *-----------------------------------------------------------------------*/
+ 
+   RAP_diag_size = jj_count_diag;
+   if (RAP_diag_size)
+   { 
+      RAP_diag_data = jxf_CTAlloc(JXF_Real, RAP_diag_size);
+      RAP_diag_j    = jxf_CTAlloc(JXF_Int, RAP_diag_size);
+   } 
+ 
+   RAP_offd_size = jj_count_offd;
+   if (RAP_offd_size)
+   { 
+        RAP_offd_data = jxf_CTAlloc(JXF_Real, RAP_offd_size);
+        RAP_offd_j    = jxf_CTAlloc(JXF_Int, RAP_offd_size);
+   } 
+
+   if (RAP_offd_size == 0 && num_cols_offd_RAP != 0)
+   {
+      num_cols_offd_RAP = 0;
+      jxf_TFree(col_map_offd_RAP);
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Second Pass: Fill in RAP_diag_data and RAP_diag_j.
+    *  Second Pass: Fill in RAP_offd_data and RAP_offd_j.
+    *-----------------------------------------------------------------------*/
+
+#define JXF_SMP_PRIVATE i,j,k,jcol,ii,ic,i1,i2,jj1,jj2,ns,ne,size,rest,jj_count_diag,jj_count_offd,jj_row_begin_diag,jj_row_begin_offd,P_marker,r_entry,r_a_p_product
+#include "../../../include/jxf_smp_forloop.h"
+   for (ii = 0; ii < num_threads; ii++)
+   {
+     size = num_cols_diag_RT/num_threads;
+     rest = num_cols_diag_RT - size*num_threads;
+     if (ii < rest)
+     {
+        ns = ii*size+ii;
+        ne = (ii+1)*size+ii+1;
+     }
+     else
+     {
+        ns = ii*size+rest;
+        ne = (ii+1)*size+rest;
+     }
+
+   /*-----------------------------------------------------------------------
+    *  Initialize some stuff.
+    *-----------------------------------------------------------------------*/
+
+   P_marker = P_mark_array[ii];
+   for (ic = 0; ic < num_cols_diag_P+num_cols_offd_RAP; ic++)
+   {      
+      P_marker[ic] = -1;
+   }
+   
+   jj_count_diag = start_indexing;
+   jj_count_offd = start_indexing;
+   if (ii > 0)
+   {
+      jj_count_diag = jj_cnt_diag[ii-1];
+      jj_count_offd = jj_cnt_offd[ii-1];
+   }
+
+   /*-----------------------------------------------------------------------
+    *  Loop over interior c-points.
+    *-----------------------------------------------------------------------*/
+   for (i = 0;i < num_sends_RT;i++)
+      RAP_ext_marker[i] = send_map_starts_RT[i];
+   for (ic = ns; ic < ne; ic++)
+   {
+      
+      /*--------------------------------------------------------------------
+       *  Create diagonal entry, RAP_{ic,ic} and add entries of RAP_ext 
+       *--------------------------------------------------------------------*/
+
+      jj_row_begin_diag = jj_count_diag;
+      jj_row_begin_offd = jj_count_offd;
+      RAP_diag_i[ic] = jj_row_begin_diag;
+      RAP_offd_i[ic] = jj_row_begin_offd;
+
+      if (square)
+      {
+         P_marker[ic] = jj_count_diag;
+         RAP_diag_data[jj_count_diag] = zero;
+         RAP_diag_j[jj_count_diag] = ic;
+         jj_count_diag++;
+      }
+
+      for (i=0; i < num_sends_RT; i++)
+        for (j = RAP_ext_marker[i]; j < send_map_starts_RT[i+1]; j++)
+        {   
+            if (send_map_elmts_RT[j] < ic)
+               RAP_ext_marker[i]++;
+            else
+            if (send_map_elmts_RT[j] == ic)
+            {    
+                for (k=RAP_ext_i[j]; k < RAP_ext_i[j+1]; k++)
+                {
+                  jcol = RAP_ext_j[k];
+                   if (jcol < num_cols_diag_P)
+                   {
+                        if (P_marker[jcol] < jj_row_begin_diag)
+                        {
+                                P_marker[jcol] = jj_count_diag;
+                                RAP_diag_data[jj_count_diag] 
+                                        = RAP_ext_data[k];
+                                RAP_diag_j[jj_count_diag] = jcol;
+                                jj_count_diag++;
+                        }
+                        else{
+                                RAP_diag_data[P_marker[jcol]]
+                                        += RAP_ext_data[k];}
+                   }
+                   else
+                   {
+                        if (P_marker[jcol] < jj_row_begin_offd)
+                        {
+                                P_marker[jcol] = jj_count_offd;
+                                RAP_offd_data[jj_count_offd] 
+                                        = RAP_ext_data[k];
+                                RAP_offd_j[jj_count_offd] 
+                                        = jcol-num_cols_diag_P;
+                                jj_count_offd++;
+                        }
+                        else{
+                                RAP_offd_data[P_marker[jcol]]
+                                        += RAP_ext_data[k];}
+                   }
+                }
+                RAP_ext_marker[i]++;
+                break;
+            }
+         else
+            break;
+        }
+
+      /*--------------------------------------------------------------------
+       * Loop over entries in row ic of RA_offd.
+       *--------------------------------------------------------------------*/
+
+      for (jj1 = R_diag_i[ic]; jj1 < R_diag_i[ic+1]; jj1++)
+      {
+         i1 = R_diag_j[jj1];
+         r_entry = R_diag_data[jj1];
+
+         /*-----------------------------------------------------------
+          *  Loop over entries in row i1 of P_ext.
+          *-----------------------------------------------------------*/
+         for (jj2 = AP_offd_i[i1]; jj2 < AP_offd_i[i1+1]; jj2++)
+         {
+            i2 = map_Pext_to_RAP[AP_offd_j[jj2]] + num_cols_diag_P;
+            r_a_p_product = r_entry * AP_offd_data[jj2];
+
+            /*--------------------------------------------------------
+             *  Check P_marker to see that RAP_{ic,i2} has not already
+             *  been accounted for. If it has not, create a new entry.
+             *  If it has, add new contribution.
+             *--------------------------------------------------------*/
+            if (P_marker[i2] < jj_row_begin_offd)
+            {
+               P_marker[i2] = jj_count_offd;
+               RAP_offd_data[jj_count_offd] = r_a_p_product;
+               RAP_offd_j[jj_count_offd] = i2 - num_cols_diag_P;
+               jj_count_offd++;
+            }
+            else
+               RAP_offd_data[P_marker[i2]] += r_a_p_product;
+         }
+
+         /*-----------------------------------------------------------------
+          *  Loop over entries in row i1 of P_diag.
+          *-----------------------------------------------------------------*/
+         for (jj2 = AP_diag_i[i1]; jj2 < AP_diag_i[i1+1]; jj2++)
+         {
+            i2 = AP_diag_j[jj2];
+            r_a_p_product = r_entry * AP_diag_data[jj2];
+            /*--------------------------------------------------------
+             *  Check P_marker to see that RAP_{ic,i2} has not already
+             *  been accounted for. If it has not, create a new entry.
+             *  If it has, add new contribution.
+             *--------------------------------------------------------*/
+
+            if (P_marker[i2] < jj_row_begin_diag)
+            {
+               P_marker[i2] = jj_count_diag;
+               RAP_diag_data[jj_count_diag] = r_a_p_product;
+               RAP_diag_j[jj_count_diag] = i2;
+               jj_count_diag++;
+            }
+            else
+            {
+               RAP_diag_data[P_marker[i2]] += r_a_p_product;
+            }
+         }
+      }
+   } // Loop over interior c-points.
+      jxf_TFree(P_mark_array[ii]);   
+      jxf_TFree(RAP_ext_marker);  
+   } // omp parallel for
+
+   /* check if really all off-diagonal entries occurring in col_map_offd_RAP
+	are represented and eliminate if necessary */
+
+   P_marker = jxf_CTAlloc(JXF_Int,num_cols_offd_RAP);
+
+#include "../../../include/jxf_smp_forloop.h"
+   for (i=0; i < num_cols_offd_RAP; i++)
+      P_marker[i] = -1;
+
+   jj_count_offd = 0;
+   for (i=0; i < RAP_offd_size; i++)
+   {
+      i3 = RAP_offd_j[i];
+      if (P_marker[i3])
+      {
+         P_marker[i3] = 0;
+         jj_count_offd++;
+      }
+   }
+
+   if (jj_count_offd < num_cols_offd_RAP)
+   {
+      new_col_map_offd_RAP = jxf_CTAlloc(JXF_Int,jj_count_offd);
+      jj_counter = 0;
+      for (i=0; i < num_cols_offd_RAP; i++)
+         if (!P_marker[i]) 
+         {
+	    P_marker[i] = jj_counter;
+	    new_col_map_offd_RAP[jj_counter++] = col_map_offd_RAP[i];
+         }
+ 
+#define JXF_SMP_PRIVATE i3
+#include "../../../include/jxf_smp_forloop.h"
+      for (i=0; i < RAP_offd_size; i++)
+      {
+	 i3 = RAP_offd_j[i];
+	 RAP_offd_j[i] = P_marker[i3];
+      }
+      
+      num_cols_offd_RAP = jj_count_offd;
+      jxf_TFree(col_map_offd_RAP);
+      col_map_offd_RAP = new_col_map_offd_RAP;
+   }
+   jxf_TFree(P_marker); 
+   RAP = jxf_ParCSRMatrixCreate(comm, n_coarse_RT, n_coarse,
+                                  RT_partitioning, coarse_partitioning,
+                                  num_cols_offd_RAP, RAP_diag_size,
+                                  RAP_offd_size);
+
+
+/* Have RAP own coarse_partitioning instead of P */
+   jxf_ParCSRMatrixSetColStartsOwner(P,0);
+   jxf_ParCSRMatrixSetColStartsOwner(RT,0);
+
+   RAP_diag = jxf_ParCSRMatrixDiag(RAP);
+   jxf_CSRMatrixI(RAP_diag) = RAP_diag_i; 
+   if (RAP_diag_size)
+   {
+      jxf_CSRMatrixData(RAP_diag) = RAP_diag_data; 
+      jxf_CSRMatrixJ(RAP_diag) = RAP_diag_j; 
+   }
+
+   RAP_offd = jxf_ParCSRMatrixOffd(RAP);
+   jxf_CSRMatrixI(RAP_offd) = RAP_offd_i; 
+   if (num_cols_offd_RAP)
+   {
+        jxf_CSRMatrixData(RAP_offd) = RAP_offd_data; 
+        jxf_CSRMatrixJ(RAP_offd) = RAP_offd_j; 
+        jxf_ParCSRMatrixColMapOffd(RAP) = col_map_offd_RAP;
+   }
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "Comm", TimerLevel);
+   TimerManagerBegin(timetag); 
+#endif
+   if (num_procs > 1)
+   {
+        jxf_MatvecCommPkgCreate(RAP); 
+   }
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "Comm", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+#if JXF_PRINT_MODULE_TIME && JXF_USE_HPCTOOLKIT == 0 //|| JXF_BOTTLENECK_ANALYSIS
+   jxf_sprintf(timetag,"%s_l%d", "SetRAP", TimerLevel);
+   TimerManagerEnd(timetag);
+#endif
+   *RAP_ptr = RAP;
+
+   /*-----------------------------------------------------------------------
+    *  Free R, P_ext and marker arrays.
+    *-----------------------------------------------------------------------*/
+
+   if (keepTranspose)
+   {
+      jxf_ParCSRMatrixDiagT(RT) = R_diag;
+   }
+   else
+   {
+      jxf_CSRMatrixDestroy(R_diag);
+   }
+   R_diag = NULL;
+
+   if (num_cols_offd_RT) 
+   {
+      if (keepTranspose)
+      {
+         jxf_ParCSRMatrixOffdT(RT) = R_offd;
+      }
+      else
+      {
+         jxf_CSRMatrixDestroy(R_offd);
+      }
+      R_offd = NULL;
+   }
+
+   if (num_sends_RT || num_recvs_RT) 
+   {
+      jxf_CSRMatrixDestroy(RAP_ext);
+      RAP_ext = NULL;
+   }
+   jxf_TFree(P_mark_array);   
+   jxf_TFree(P_ext_diag_i);
+   jxf_TFree(P_ext_offd_i);
+   jxf_TFree(jj_cnt_diag);   
+   jxf_TFree(jj_cnt_offd);   
+   if (num_cols_offd_P)
+   {
+      jxf_TFree(map_P_to_Pext);
+      jxf_TFree(map_P_to_RAP);
+   }
+   if (num_cols_offd_Pext)
+   {
+      jxf_TFree(col_map_offd_Pext);
+      jxf_TFree(map_Pext_to_RAP);
+   }
+   if (P_ext_diag_size)
+   {
+      jxf_TFree(P_ext_diag_data);
+      jxf_TFree(P_ext_diag_j);
+   }
+   if (P_ext_offd_size)
+   {
+      jxf_TFree(P_ext_offd_data);
+      jxf_TFree(P_ext_offd_j);
+   }
+jxf_TFree(AP_diag_data);
+jxf_TFree(AP_offd_data);
+jxf_TFree(AP_diag_i);
+jxf_TFree(AP_offd_i);
+jxf_TFree(AP_diag_j);
+jxf_TFree(AP_offd_j);
+   return(0);
+}
+

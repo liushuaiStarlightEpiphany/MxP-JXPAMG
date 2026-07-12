@@ -1,0 +1,1312 @@
+#include "jx_parilu.h"
+#include "jx_krylov.h"
+
+/*--------------------------------------------------------------------------
+ * JX_ILUCreate
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUCreate(JX_Solver *solver)
+{
+   if (!solver)
+   {
+      jx_error_in_arg(2);
+      return jx_error_flag;
+   }
+   *solver = ((JX_Solver)jx_ILUCreate());
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUDestroy
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUDestroy(JX_Solver solver)
+{
+   return (jx_ILUDestroy((void *)solver));
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetup
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetup(JX_Solver solver,
+            JX_ParCSRMatrix A,
+            JX_ParVector b,
+            JX_ParVector x)
+{
+   return (jx_ILUSetup((void *)solver,
+                       (jx_ParCSRMatrix *)A,
+                       (jx_ParVector *)b,
+                       (jx_ParVector *)x));
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSolve
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSolve(JX_Solver solver,
+            JX_ParCSRMatrix A,
+            JX_ParVector b,
+            JX_ParVector x)
+{
+   return (jx_ILUSolve((void *)solver,
+                       (jx_ParCSRMatrix *)A,
+                       (jx_ParVector *)b,
+                       (jx_ParVector *)x));
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetPrintLevel
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetPrintLevel(JX_Solver solver, JX_Int print_level)
+{
+   return jx_ILUSetPrintLevel(solver, print_level);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetLogging
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetLogging(JX_Solver solver, JX_Int logging)
+{
+   return jx_ILUSetLogging(solver, logging);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetMaxIter
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetMaxIter(JX_Solver solver, JX_Int max_iter)
+{
+   return jx_ILUSetMaxIter(solver, max_iter);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetIterativeSetupType
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetIterativeSetupType(JX_Solver solver, JX_Int iter_setup_type)
+{
+   return jx_ILUSetIterativeSetupType(solver, iter_setup_type);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetIterativeSetupMaxIter
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetIterativeSetupMaxIter(JX_Solver solver, JX_Int iter_setup_max_iter)
+{
+   return jx_ILUSetIterativeSetupMaxIter(solver, iter_setup_max_iter);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetIterativeSetupTolerance
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetIterativeSetupTolerance(JX_Solver solver, JX_Real iter_setup_tolerance)
+{
+   return jx_ILUSetIterativeSetupTolerance(solver, iter_setup_tolerance);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetTriSolve
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetTriSolve(JX_Solver solver, JX_Int tri_solve)
+{
+   return jx_ILUSetTriSolve(solver, tri_solve);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetLowerJacobiIters
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetLowerJacobiIters(JX_Solver solver, JX_Int lower_jacobi_iters)
+{
+   return jx_ILUSetLowerJacobiIters(solver, lower_jacobi_iters);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetUpperJacobiIters
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetUpperJacobiIters(JX_Solver solver, JX_Int upper_jacobi_iters)
+{
+   return jx_ILUSetUpperJacobiIters(solver, upper_jacobi_iters);
+}
+
+JX_Int
+JX_ILUSetIRIters(JX_Solver solver, JX_Int IR_iters)
+{
+   return jx_ILUSetIRIters(solver, IR_iters);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetTol
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetTol(JX_Solver solver, JX_Real tol)
+{
+   return jx_ILUSetTol(solver, tol);
+}
+
+JX_Int
+JX_ILUSetsweep(JX_Solver solver, JX_Real sweep)
+{
+   return jx_ILUSetsweep(solver, sweep);
+}
+/*--------------------------------------------------------------------------
+ * JX_ILUSetDropThreshold
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetDropThreshold(JX_Solver solver, JX_Real threshold)
+{
+   return jx_ILUSetDropThreshold(solver, threshold);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetDropThresholdArray
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetDropThresholdArray(JX_Solver solver, JX_Real *threshold)
+{
+   return jx_ILUSetDropThresholdArray(solver, threshold);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetMaxNnzPerRow
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetMaxNnzPerRow(JX_Solver solver, JX_Int nzmax)
+{
+   return jx_ILUSetMaxNnzPerRow(solver, nzmax);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetLevelOfFill
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetLevelOfFill(JX_Solver solver, JX_Int lfil)
+{
+   return jx_ILUSetLevelOfFill(solver, lfil);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetType
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetType(JX_Solver solver, JX_Int ilu_type)
+{
+   return jx_ILUSetType(solver, ilu_type);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUSetLocalReordering
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUSetLocalReordering(JX_Solver solver, JX_Int ordering_type)
+{
+   return jx_ILUSetLocalReordering(solver, ordering_type);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUGetNumIterations
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUGetNumIterations(JX_Solver solver, JX_Int *num_iterations)
+{
+   return jx_ILUGetNumIterations(solver, num_iterations);
+}
+
+/*--------------------------------------------------------------------------
+ * JX_ILUGetFinalRelativeResidualNorm
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+JX_ILUGetFinalRelativeResidualNorm(JX_Solver solver, JX_Real *res_norm)
+{
+   return jx_ILUGetFinalRelativeResidualNorm(solver, res_norm);
+}
+
+void *
+jx_ILUCreate(void)
+{
+   jx_ParILUData *ilu_data;
+
+   ilu_data = jx_CTAlloc(jx_ParILUData, 1);
+
+   /* general data */
+   jx_ParILUDataGlobalSolver(ilu_data) = 0;
+   jx_ParILUDataMatA(ilu_data) = NULL;
+   jx_ParILUDataMatL(ilu_data) = NULL;
+   jx_ParILUDataMatD(ilu_data) = NULL;
+   jx_ParILUDataMatU(ilu_data) = NULL;
+   jx_ParILUDataMatS(ilu_data) = NULL;
+   // jx_ParILUDataSchurSolver(ilu_data)                  = NULL;
+   // jx_ParILUDataSchurPrecond(ilu_data)                 = NULL;
+   jx_ParILUDataRhs(ilu_data) = NULL;
+   jx_ParILUDataX(ilu_data) = NULL;
+
+   /* TODO (VPM): Transform this into a stack array */
+   jx_ParILUDataDroptol(ilu_data) = jx_TAlloc(JX_Real, 3);
+   jx_ParILUDataDroptol(ilu_data)[0] = 1.0e-02; /* droptol for B */
+   jx_ParILUDataDroptol(ilu_data)[1] = 1.0e-02; /* droptol for E and F */
+   jx_ParILUDataDroptol(ilu_data)[2] = 1.0e-02; /* droptol for S */
+   jx_ParILUDataLfil(ilu_data) = 0;
+   jx_ParILUDataMaxRowNnz(ilu_data) = 1000;
+   jx_ParILUDataCFMarkerArray(ilu_data) = NULL;
+   jx_ParILUDataPerm(ilu_data) = NULL;
+   jx_ParILUDataQPerm(ilu_data) = NULL;
+   jx_ParILUDataTolDDPQ(ilu_data) = 1.0e-01;
+   jx_ParILUDataF(ilu_data) = NULL;
+   jx_ParILUDataU(ilu_data) = NULL;
+   jx_ParILUDataFTemp(ilu_data) = NULL;
+   jx_ParILUDataUTemp(ilu_data) = NULL;
+   jx_ParILUDataXTemp(ilu_data) = NULL;
+   jx_ParILUDataYTemp(ilu_data) = NULL;
+   jx_ParILUDataZTemp(ilu_data) = NULL;
+   jx_ParILUDataUExt(ilu_data) = NULL;
+   jx_ParILUDataFExt(ilu_data) = NULL;
+   jx_ParILUDataResidual(ilu_data) = NULL;
+   jx_ParILUDataRelResNorms(ilu_data) = NULL;
+   jx_ParILUDataNumIterations(ilu_data) = 0;
+   jx_ParILUDataMaxIter(ilu_data) = 20;
+   jx_ParILUDataTriSolve(ilu_data) = 1;
+   jx_ParILUDataLowerJacobiIters(ilu_data) = 5;
+   jx_ParILUDataUpperJacobiIters(ilu_data) = 5;
+   jx_ParILUDataIRIters(ilu_data) = 5;
+   jx_ParILUDataTol(ilu_data) = 1.0e-7;
+   jx_ParILUDataLogging(ilu_data) = 0;
+   jx_ParILUDataPrintLevel(ilu_data) = 0;
+   jx_ParILUDataL1Norms(ilu_data) = NULL;
+   jx_ParILUDataOperatorComplexity(ilu_data) = 0.;
+   jx_ParILUDataIluType(ilu_data) = 0;
+   jx_ParILUDataNLU(ilu_data) = 0;
+   jx_ParILUDataNI(ilu_data) = 0;
+   jx_ParILUDatasweep(ilu_data) = 5;
+   jx_ParILUDataUEnd(ilu_data) = NULL;
+   jx_ParILUDataL_perm(ilu_data) = NULL;
+   jx_ParILUDataL_iperm(ilu_data) = NULL;
+
+   jx_ParILUDataU_perm(ilu_data) = NULL;
+   jx_ParILUDataU_iperm(ilu_data) = NULL;
+
+   /* Iterative setup variables */
+   jx_ParILUDataIterativeSetupType(ilu_data) = 0;
+   // jx_ParILUDataIterativeSetupOption(ilu_data)         = 0;
+   jx_ParILUDataIterativeSetupMaxIter(ilu_data) = 100;
+   jx_ParILUDataIterativeSetupNumIter(ilu_data) = 0;
+   jx_ParILUDataIterativeSetupTolerance(ilu_data) = 1.e-6;
+   jx_ParILUDataIterativeSetupHistory(ilu_data) = NULL;
+
+   /* reordering_type default to use local RCM */
+   jx_ParILUDataReorderingType(ilu_data) = 0;
+
+   jx_ParILUDataL_levels(ilu_data) = NULL;
+   jx_ParILUDataL_level_sizes(ilu_data) = NULL;
+
+   jx_ParILUDataU_levels(ilu_data) = NULL;
+   jx_ParILUDataU_level_sizes(ilu_data) = NULL;
+
+   return ilu_data;
+}
+
+JX_Int
+jx_ILUDestroy(void *data)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)data;
+
+   if (ilu_data)
+   {
+      /* General data */
+      if (jx_ParILUDataMatA(ilu_data))
+      {
+         jx_ParCSRMatrixDestroy(jx_ParILUDataMatA(ilu_data));
+         jx_ParILUDataMatA(ilu_data) = NULL;
+      }
+      if (jx_ParILUDataMatL(ilu_data))
+      {
+         jx_ParCSRMatrixDestroy(jx_ParILUDataMatL(ilu_data));
+         jx_ParILUDataMatL(ilu_data) = NULL;
+      }
+      if (jx_ParILUDataMatU(ilu_data))
+      {
+         jx_ParCSRMatrixDestroy(jx_ParILUDataMatU(ilu_data));
+         jx_ParILUDataMatU(ilu_data) = NULL;
+      }
+      if (jx_ParILUDataMatD(ilu_data))
+      {
+         jx_TFree(jx_ParILUDataMatD(ilu_data));
+         jx_ParILUDataMatD(ilu_data) = NULL;
+      }
+      if (jx_ParILUDataPerm(ilu_data))
+      {
+         jx_TFree(jx_ParILUDataPerm(ilu_data));
+         jx_ParILUDataPerm(ilu_data) = NULL;
+      }
+      if (jx_ParILUDataQPerm(ilu_data))
+      {
+         jx_TFree(jx_ParILUDataQPerm(ilu_data));
+         jx_ParILUDataQPerm(ilu_data) = NULL;
+      }
+      // if ( jx_ParILUDataL_perm(ilu_data))
+      // {
+      //    jx_TFree(jx_ParILUDataL_perm(ilu_data));
+      //    jx_ParILUDataL_perm(ilu_data) = NULL;
+      // }
+      // if ( jx_ParILUDataU_perm(ilu_data))
+      // {
+      //    jx_TFree(jx_ParILUDataU_perm(ilu_data));
+      //    jx_ParILUDataU_perm(ilu_data) = NULL;
+      // }
+      // if ( jx_ParILUDataL_iperm(ilu_data))
+      // {
+      //    jx_TFree(jx_ParILUDataL_iperm(ilu_data));
+      //    jx_ParILUDataL_iperm(ilu_data)(ilu_data) = NULL;
+      // }
+      // if ( jx_ParILUDataL_iperm(ilu_data))
+      // {
+      //    jx_TFree(jx_ParILUDataU_iperm(ilu_data));
+      //    jx_ParILUDataU_iperm(ilu_data)(ilu_data) = NULL;
+      // }
+      /* Free the main ILU data structure */
+      // jx_TFree(ilu_data);
+   }
+
+   return 0; /* Return success */
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetLevelOfFill
+ *
+ * Set fill level for ILUK
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetLevelOfFill(void *ilu_vdata,
+                     JX_Int lfil)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataLfil(ilu_data) = lfil;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetMaxNnzPerRow
+ *
+ * Set max non-zeros per row in factors for ILUT
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetMaxNnzPerRow(void *ilu_vdata,
+                      JX_Int nzmax)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataMaxRowNnz(ilu_data) = nzmax;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetDropThreshold
+ *
+ * Set threshold for dropping in LU factors for ILUT
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetDropThreshold(void *ilu_vdata,
+                       JX_Real threshold)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   if (!(jx_ParILUDataDroptol(ilu_data)))
+   {
+      jx_ParILUDataDroptol(ilu_data) = jx_TAlloc(JX_Real, 3);
+   }
+   jx_ParILUDataDroptol(ilu_data)[0] = threshold;
+   jx_ParILUDataDroptol(ilu_data)[1] = threshold;
+   jx_ParILUDataDroptol(ilu_data)[2] = threshold;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetDropThresholdArray
+ *
+ * Set array of threshold for dropping in LU factors for ILUT
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetDropThresholdArray(void *ilu_vdata,
+                            JX_Real *threshold)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   if (!(jx_ParILUDataDroptol(ilu_data)))
+   {
+      jx_ParILUDataDroptol(ilu_data) = jx_TAlloc(JX_Real, 3);
+   }
+
+   jx_ParILUDataDroptol(ilu_data)[0] = threshold[0];
+   jx_ParILUDataDroptol(ilu_data)[1] = threshold[1];
+   jx_ParILUDataDroptol(ilu_data)[2] = threshold[2];
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetType
+ *
+ * Set ILU factorization type
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetType(void *ilu_vdata,
+              JX_Int ilu_type)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+   jx_ParILUDataIluType(ilu_data) = ilu_type;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetMaxIter
+ *
+ * Set max number of iterations for ILU solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetMaxIter(void *ilu_vdata,
+                 JX_Int max_iter)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataMaxIter(ilu_data) = max_iter;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetIterativeSetupType
+ *
+ * Set iterative ILU setup algorithm
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetIterativeSetupType(void *ilu_vdata,
+                            JX_Int iter_setup_type)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataIterativeSetupType(ilu_data) = iter_setup_type;
+
+   return jx_error_flag;
+}
+/*--------------------------------------------------------------------------
+ * jx_ILUSetIterativeSetupMaxIter
+ *
+ * Set maximum number of iterations for iterative ILU setup
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetIterativeSetupMaxIter(void *ilu_vdata,
+                               JX_Int iter_setup_max_iter)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataIterativeSetupMaxIter(ilu_data) = iter_setup_max_iter;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetIterativeSetupTolerance
+ *
+ * Set dropping tolerance for iterative ILU setup
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetIterativeSetupTolerance(void *ilu_vdata,
+                                 JX_Real iter_setup_tolerance)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataIterativeSetupTolerance(ilu_data) = iter_setup_tolerance;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUGetIterativeSetupHistory
+ *
+ * Get array of corrections and/or residual norms computed during ILU's
+ * iterative setup algorithm.
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUGetIterativeSetupHistory(void *ilu_vdata,
+                               JX_Real **iter_setup_history)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   *iter_setup_history = jx_ParILUDataIterativeSetupHistory(ilu_data);
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetTriSolve
+ *
+ * Set ILU triangular solver type
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetTriSolve(void *ilu_vdata,
+                  JX_Int tri_solve)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataTriSolve(ilu_data) = tri_solve;
+
+   // printf("ilu_tri_solver2: %d\n",tri_solve);
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetLowerJacobiIters
+ *
+ * Set Lower Jacobi iterations for iterative triangular solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetLowerJacobiIters(void *ilu_vdata,
+                          JX_Int lower_jacobi_iters)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataLowerJacobiIters(ilu_data) = lower_jacobi_iters;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetUpperJacobiIters
+ *
+ * Set Upper Jacobi iterations for iterative triangular solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetUpperJacobiIters(void *ilu_vdata,
+                          JX_Int upper_jacobi_iters)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataUpperJacobiIters(ilu_data) = upper_jacobi_iters;
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_ILUSetIRIters(void *ilu_vdata,
+                 JX_Int IR_iters)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataIRIters(ilu_data) = IR_iters;
+
+   return jx_error_flag;
+}
+/*--------------------------------------------------------------------------
+ * jx_ILUSetTol
+ *
+ * Set convergence tolerance for ILU solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetTol(void *ilu_vdata,
+             JX_Real tol)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataTol(ilu_data) = tol;
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_ILUSetsweep(void *ilu_vdata,
+               JX_Real sweep)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDatasweep(ilu_data) = sweep;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetPrintLevel
+ *
+ * Set print level for ILU solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetPrintLevel(void *ilu_vdata,
+                    JX_Int print_level)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataPrintLevel(ilu_data) = print_level;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetLogging
+ *
+ * Set print level for ilu solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetLogging(void *ilu_vdata,
+                 JX_Int logging)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataLogging(ilu_data) = logging;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUSetLocalReordering
+ *
+ * Set type of reordering for local matrix
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSetLocalReordering(void *ilu_vdata,
+                         JX_Int ordering_type)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   jx_ParILUDataReorderingType(ilu_data) = ordering_type;
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUGetNumIterations
+ *
+ * Get number of iterations for ILU solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUGetNumIterations(void *ilu_vdata,
+                       JX_Int *num_iterations)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   if (!ilu_data)
+   {
+      jx_error_in_arg(1);
+      return jx_error_flag;
+   }
+
+   *num_iterations = jx_ParILUDataNumIterations(ilu_data);
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUGetFinalRelativeResidualNorm
+ *
+ * Get residual norms for ILU solver
+ *--------------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUGetFinalRelativeResidualNorm(void *ilu_vdata,
+                                   JX_Real *res_norm)
+{
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   if (!ilu_data)
+   {
+      jx_error_in_arg(1);
+      return jx_error_flag;
+   }
+
+   *res_norm = jx_ParILUDataFinalRelResidualNorm(ilu_data);
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------------
+ * jx_ILUWriteSolverParams
+ *
+ * Print solver params
+ *
+ * TODO (VPM): check runtime switch to decide whether running on host or device
+ *--------------------------------------------------------------------------*/
+
+// JX_Int
+// jx_ILUWriteSolverParams(void *ilu_vdata)
+// {
+//    jx_ParILUData  *ilu_data = (jx_ParILUData*) ilu_vdata;
+
+//    jx_printf("ILU Setup parameters: \n");
+//    jx_printf("ILU factorization type: %d : ", jx_ParILUDataIluType(ilu_data));
+//    switch (jx_ParILUDataIluType(ilu_data))
+//    {
+//       case 0:
+// // #if defined(JX_USING_GPU)
+// //          if ( jx_ParILUDataLfil(ilu_data) == 0 )
+// //          {
+// //             jx_printf("Block Jacobi with GPU-accelerated ILU0 \n");
+// //             jx_printf("Operator Complexity (Fill factor) = %f \n",
+// //                          jx_ParILUDataOperatorComplexity(ilu_data));
+// //          }
+// //          else
+// // #endif
+//          jx_printf("Block Jacobi with ILU(%d) \n", jx_ParILUDataLfil(ilu_data));
+//          jx_printf("Operator Complexity (Fill factor) = %f \n",
+//                         jx_ParILUDataOperatorComplexity(ilu_data));
+//          break;
+
+//       // case 1:
+//       //    jx_printf("Block Jacobi with ILUT \n");
+//       //    jx_printf("drop tolerance for B = %e, E&F = %e, S = %e \n",
+//       //                 jx_ParILUDataDroptol(ilu_data)[0],
+//       //                 jx_ParILUDataDroptol(ilu_data)[1],
+//       //                 jx_ParILUDataDroptol(ilu_data)[2]);
+//       //    jx_printf("Max nnz per row = %d \n", jx_ParILUDataMaxRowNnz(ilu_data));
+//       //    jx_printf("Operator Complexity (Fill factor) = %f \n",
+//       //                 jx_ParILUDataOperatorComplexity(ilu_data));
+//       //    break;
+
+//       default:
+//          jx_printf("Unknown type \n");
+//          break;
+//    }
+
+//    jx_printf("\n ILU Solver Parameters: \n");
+//    jx_printf("Max number of iterations: %d\n", jx_ParILUDataMaxIter(ilu_data));
+//    if (jx_ParILUDataTriSolve(ilu_data))
+//    {
+//       jx_printf("  Triangular solver type: exact (1)\n");
+//    }
+//    else
+//    {
+//       jx_printf("  Triangular solver type: iterative (0)\n");
+//       jx_printf(" Lower Jacobi Iterations: %d\n", jx_ParILUDataLowerJacobiIters(ilu_data));
+//       jx_printf(" Upper Jacobi Iterations: %d\n", jx_ParILUDataUpperJacobiIters(ilu_data));
+//    }
+//    jx_printf("      Stopping tolerance: %e\n", jx_ParILUDataTol(ilu_data));
+
+//    return jx_error_flag;
+// }
+
+// JX_Int
+// jx_ILUGetPermddPQPre(JX_Int   n,
+//                         JX_Int   nLU,
+//                         JX_Int  *A_diag_i,
+//                         JX_Int  *A_diag_j,
+//                         JX_Real *A_diag_data,
+//                         JX_Real  tol,
+//                         JX_Int  *perm,
+//                         JX_Int  *rperm,
+//                         JX_Int  *pperm_pre,
+//                         JX_Int  *qperm_pre,
+//                         JX_Int  *nB)
+// {
+//    JX_UNUSED_VAR(n);
+
+//    JX_Int   i, ii, nB_pre, k1, k2;
+//    JX_Real  gtol, max_value, norm;
+
+//    JX_Int   *jcol, *jnnz;
+//    JX_Real  *weight;
+
+//    weight = jx_TAlloc(JX_Real, nLU + 1, JX_MEMORY_HOST);
+//    jcol   = jx_TAlloc(JX_Int, nLU + 1, JX_MEMORY_HOST);
+//    jnnz   = jx_TAlloc(JX_Int, nLU + 1, JX_MEMORY_HOST);
+
+//    max_value = -1.0;
+
+//    /* first need to build gtol */
+//    for (ii = 0; ii < nLU; ii++)
+//    {
+//       /* find real row */
+//       i = perm[ii];
+//       k1 = A_diag_i[i];
+//       k2 = A_diag_i[i + 1];
+
+//       /* find max|a| of that row and its index */
+//       jx_ILUMaxRabs(A_diag_data, A_diag_j, k1, k2, nLU, rperm,
+//                        weight + ii, jcol + ii, &norm, jnnz + ii);
+//       weight[ii] /= norm;
+//       if (weight[ii] > max_value)
+//       {
+//          max_value = weight[ii];
+//       }
+//    }
+
+//    gtol = tol * max_value;
+
+//    /* second loop to pre select B */
+//    nB_pre = 0;
+//    for ( ii = 0 ; ii < nLU ; ii ++)
+//    {
+//       /* keep this row */
+//       if (weight[ii] > gtol)
+//       {
+//          weight[nB_pre] /= (JX_Real)(jnnz[ii]);
+//          pperm_pre[nB_pre] = perm[ii];
+//          qperm_pre[nB_pre++] = A_diag_j[jcol[ii]];
+//       }
+//    }
+
+//    *nB = nB_pre;
+
+//    /* sort from small to large */
+//    jx_qsort3(weight, pperm_pre, qperm_pre, 0, nB_pre - 1);
+
+//    jx_TFree(weight);
+//    jx_TFree(jcol);
+//    jx_TFree(jnnz);
+
+//    return jx_error_flag;
+// }
+
+// JX_Int
+// jx_ILUMaxRabs(JX_Real  *array_data,
+//                  JX_Int   *array_j,
+//                  JX_Int    start,
+//                  JX_Int    end,
+//                  JX_Int    nLU,
+//                  JX_Int   *rperm,
+//                  JX_Real  *value,
+//                  JX_Int   *index,
+//                  JX_Real  *l1_norm,
+//                  JX_Int   *nnz)
+// {
+//    JX_Int i, idx, col, nz;
+//    JX_Real val, max_value, norm;
+
+//    nz = 0;
+//    norm = 0.0;
+//    max_value = -1.0;
+//    idx = -1;
+//    if (rperm)
+//    {
+//       /* apply rperm and nLU */
+//       for (i = start ; i < end ; i ++)
+//       {
+//          col = rperm[array_j[i]];
+//          if (col > nLU)
+//          {
+//             /* this old column is in new external part */
+//             continue;
+//          }
+//          nz ++;
+//          val = abs(array_data[i]);
+//          norm += val;
+//          if (max_value < val)
+//          {
+//             max_value = val;
+//             idx = i;
+//          }
+//       }
+//    }
+//    else
+//    {
+//       /* basic search */
+//       for (i = start ; i < end ; i ++)
+//       {
+//          val = abs(array_data[i]);
+//          norm += val;
+//          if (max_value < val)
+//          {
+//             max_value = val;
+//             idx = i;
+//          }
+//       }
+//       nz = end - start;
+//    }
+
+//    *value = max_value;
+//    if (index)
+//    {
+//       *index = idx;
+//    }
+//    if (l1_norm)
+//    {
+//       *l1_norm = norm;
+//    }
+//    if (nnz)
+//    {
+//       *nnz = nz;
+//    }
+
+//    return jx_error_flag;
+// }
+
+// /*--------------------------------------------------------------------------
+//  * jx_ILULocalRCMBuildFinalPerm
+//  *--------------------------------------------------------------------------*/
+
+// JX_Int
+// jx_ILULocalRCMBuildFinalPerm(JX_Int   start,
+//                                 JX_Int   end,
+//                                 JX_Int  *G_perm,
+//                                 JX_Int  *perm,
+//                                 JX_Int  *qperm,
+//                                 JX_Int **permp,
+//                                 JX_Int **qpermp)
+// {
+//    /* update to new index */
+//    JX_Int i = 0;
+//    JX_Int num_nodes = end - start;
+//    JX_Int *perm_temp = jx_TAlloc(JX_Int, num_nodes, JX_MEMORY_HOST);
+
+//    for ( i = 0 ; i < num_nodes ; i ++)
+//    {
+//       perm_temp[i] = perm[i + start];
+//    }
+//    for ( i = 0 ; i < num_nodes ; i ++)
+//    {
+//       perm[i + start] = perm_temp[G_perm[i]];
+//    }
+//    if (perm != qperm)
+//    {
+//       for ( i = 0 ; i < num_nodes ; i ++)
+//       {
+//          perm_temp[i] = qperm[i + start];
+//       }
+//       for ( i = 0 ; i < num_nodes ; i ++)
+//       {
+//          qperm[i + start] = perm_temp[G_perm[i]];
+//       }
+//    }
+
+//    *permp   = perm;
+//    *qpermp  = qperm;
+
+//    jx_TFree(perm_temp, JX_MEMORY_HOST);
+
+//    return jx_error_flag;
+// }
+
+/*--------------------------------------------------------------------------
+ * jx_ILULocalRCM
+ *
+ * This function computes the RCM ordering of a sub matrix of
+ * sparse matrix B = A(perm,perm)
+ * For nonsymmetrix problem, is the RCM ordering of B + B'
+ * A: The input CSR matrix
+ * start:      the start position of the submatrix in B
+ * end:        the end position of the submatrix in B ( exclude end, [start,end) )
+ * permp:      pointer to the row permutation array such that B = A(perm, perm)
+ *             point to NULL if you want to work directly on A
+ *             on return, permp will point to the new permutation where
+ *             in [start, end) the matrix will reordered. if *permp is not NULL,
+ *             we assume that it lives on the host memory at input. At output,
+ *             it lives in the same memory location as A.
+ * qpermp:     pointer to the col permutation array such that B = A(perm, perm)
+ *             point to NULL or equal to permp if you want symmetric order
+ *             on return, qpermp will point to the new permutation where
+ *             in [start, end) the matrix will reordered. if *qpermp is not NULL,
+ *             we assume that it lives on the host memory at input. At output,
+ *             it lives in the same memory location as A.
+ * sym:        set to nonzero to work on A only(symmetric), otherwise A + A'.
+ *             WARNING: if you use non-symmetric reordering, that is,
+ *             different row and col reordering, the resulting A might be non-symmetric.
+ *             Be careful if you are using non-symmetric reordering
+ *
+ * TODO (VPM): Implement RCM computation on the device.
+ *             Use IntArray for perm.
+ *             Move this function and internal RCM calls to parcsr_mv.
+ *--------------------------------------------------------------------------*/
+
+// JX_Int
+// jx_ILULocalRCM(jx_CSRMatrix *A,
+//                   JX_Int        start,
+//                   JX_Int        end,
+//                   JX_Int      **permp,
+//                   JX_Int      **qpermp,
+//                   JX_Int        sym)
+// {
+//    /* Input variables */
+//    JX_Int               num_nodes       = end - start;
+//    JX_Int               n               = jx_CSRMatrixNumRows(A);
+//    JX_Int               ncol            = jx_CSRMatrixNumCols(A);
+//    JX_MemoryLocation    memory_location = jx_CSRMatrixMemoryLocation(A);
+//    JX_Int               A_nnz           = jx_CSRMatrixNumNonzeros(A);
+//    JX_Int              *A_i;
+//    JX_Int              *A_j;
+
+//    /* Local variables */
+//    jx_CSRMatrix         *GT        = NULL;
+//    jx_CSRMatrix         *GGT       = NULL;
+//    jx_CSRMatrix         *G         = NULL;
+//    JX_Int               *G_i       = NULL;
+//    JX_Int               *G_j       = NULL;
+//    JX_Int               *G_perm    = NULL;
+//    JX_Int               *perm_temp = NULL;
+//    JX_Int               *rqperm    = NULL;
+//    JX_Int               *d_perm    = NULL;
+//    JX_Int               *d_qperm   = NULL;
+//    JX_Int               *perm      = *permp;
+//    JX_Int               *qperm     = *qpermp;
+
+//    JX_Int                perm_is_qperm;
+//    JX_Int                i, j, row, col, r1, r2;
+//    JX_Int                G_nnz, G_capacity;
+
+//    /* Set flag for computing row and column permutations (true) or only row permutation (false) */
+//    perm_is_qperm = (perm == qperm) ? 1 : 0;
+
+//    /* 1: Preprosessing
+//     * Check error in input, set some parameters
+//     */
+//    if (num_nodes <= 0)
+//    {
+//       /* don't do this if we are too small */
+//       return jx_error_flag;
+//    }
+
+//    if (n != ncol || end > n || start < 0)
+//    {
+//       /* don't do this if the input has error */
+//       jx_printf("Error input, abort RCM\n");
+//       return jx_error_flag;
+//    }
+
+//    JX_ANNOTATE_FUNC_BEGIN;
+//    jx_GpuProfilingPushRange("ILULocalRCM");
+
+//    /* create permutation array if we don't have one yet */
+//    if (!perm)
+//    {
+//       perm = jx_TAlloc(JX_Int, n, JX_MEMORY_HOST);
+//       for (i = 0; i < n; i++)
+//       {
+//          perm[i] = i;
+//       }
+//    }
+
+//    /* Check for symmetric reordering, then point qperm to row reordering */
+//    if (!qperm)
+//    {
+//       qperm = perm;
+//    }
+
+//    /* Compute reverse qperm ordering */
+//    rqperm = jx_TAlloc(JX_Int, n, JX_MEMORY_HOST);
+//    for (i = 0; i < n; i++)
+//    {
+//       rqperm[qperm[i]] = i;
+//    }
+
+//    /* Set/Move A_i and A_j to host */
+//    if (jx_GetActualMemLocation(memory_location) == jx_MEMORY_DEVICE)
+//    {
+//       A_i = jx_TAlloc(JX_Int, n + 1, JX_MEMORY_HOST);
+//       A_j = jx_TAlloc(JX_Int, A_nnz, JX_MEMORY_HOST);
+
+//       jx_TMemcpy(A_i, jx_CSRMatrixI(A), JX_Int, n + 1,
+//                     JX_MEMORY_HOST, JX_MEMORY_DEVICE);
+//       jx_TMemcpy(A_j, jx_CSRMatrixJ(A), JX_Int, A_nnz,
+//                     JX_MEMORY_HOST, JX_MEMORY_DEVICE);
+//    }
+//    else
+//    {
+//       A_i = jx_CSRMatrixI(A);
+//       A_j = jx_CSRMatrixJ(A);
+//    }
+
+//    /* 2: Build Graph
+//     * Build Graph for RCM ordering
+//     */
+//    G_nnz = 0;
+//    G_capacity = jx_max((A_nnz * n * n / num_nodes / num_nodes) - num_nodes, 1);
+//    G_i = jx_TAlloc(JX_Int, num_nodes + 1, JX_MEMORY_HOST);
+//    G_j = jx_TAlloc(JX_Int, G_capacity, JX_MEMORY_HOST);
+
+//    /* TODO (VPM): Extend jx_CSRMatrixPermute to replace the block below */
+//    for (i = 0; i < num_nodes; i++)
+//    {
+//       G_i[i] = G_nnz;
+//       row = perm[i + start];
+//       r1 = A_i[row];
+//       r2 = A_i[row + 1];
+//       for (j = r1; j < r2; j ++)
+//       {
+//          col = rqperm[A_j[j]];
+//          if (col != row && col >= start && col < end)
+//          {
+//             /* this is an entry in G */
+//             G_j[G_nnz++] = col - start;
+//             if (G_nnz >= G_capacity)
+//             {
+//                JX_Int tmp = G_capacity;
+//                G_capacity = (JX_Int) (G_capacity * EXPAND_FACT + 1);
+//                G_j = jx_TReAlloc_v2(G_j, JX_Int, tmp, JX_Int,
+//                                        G_capacity, JX_MEMORY_HOST);
+//             }
+//          }
+//       }
+//    }
+//    G_i[num_nodes] = G_nnz;
+
+//    /* Free memory */
+//    if (A_i != jx_CSRMatrixI(A))
+//    {
+//       jx_TFree(A_i, JX_MEMORY_HOST);
+//    }
+//    if (A_j != jx_CSRMatrixJ(A))
+//    {
+//       jx_TFree(A_j, JX_MEMORY_HOST);
+//    }
+
+//    /* Create matrix G on the host */
+//    G = jx_CSRMatrixCreate(num_nodes, num_nodes, G_nnz);
+//    jx_CSRMatrixMemoryLocation(G) = JX_MEMORY_HOST;
+//    jx_CSRMatrixI(G) = G_i;
+//    jx_CSRMatrixJ(G) = G_j;
+
+//    /* Check if G is not empty (no need to do any kind of RCM) */
+//    if (G_nnz > 0)
+//    {
+//       /* Sum G with G' if G is nonsymmetric */
+//       if (!sym)
+//       {
+//          jx_CSRMatrixData(G) = jx_CTAlloc(JX_Complex, G_nnz);
+//          jx_CSRMatrixTranspose(G, &GT, 1);
+//          GGT = jx_CSRMatrixAdd(1.0, G, 1.0, GT);
+//          jx_CSRMatrixDestroy(G);
+//          jx_CSRMatrixDestroy(GT);
+//          G = GGT;
+//          GGT = NULL;
+//       }
+
+//       /* 3: Build RCM on the host */
+//       G_perm = jx_TAlloc(JX_Int, num_nodes, JX_MEMORY_HOST);
+//       jx_ILULocalRCMOrder(G, G_perm);
+
+//       /* 4: Post processing
+//        * Free, set value, return
+//        */
+
+//       /* update to new index */
+//       perm_temp = jx_TAlloc(JX_Int, num_nodes, JX_MEMORY_HOST);
+//       jx_TMemcpy(perm_temp, &perm[start], JX_Int, num_nodes,
+//                     JX_MEMORY_HOST, JX_MEMORY_HOST);
+//       for (i = 0; i < num_nodes; i++)
+//       {
+//          perm[i + start] = perm_temp[G_perm[i]];
+//       }
+
+//       if (!perm_is_qperm)
+//       {
+//          jx_TMemcpy(perm_temp, &qperm[start], JX_Int, num_nodes,
+//                        JX_MEMORY_HOST, JX_MEMORY_HOST);
+//          for (i = 0; i < num_nodes; i++)
+//          {
+//             qperm[i + start] = perm_temp[G_perm[i]];
+//          }
+//       }
+//    }
+
+//    /* Move to device memory if needed */
+//    if (memory_location == JX_MEMORY_DEVICE)
+//    {
+//       d_perm = jx_TAlloc(JX_Int, n, JX_MEMORY_DEVICE);
+//       jx_TMemcpy(d_perm, perm, JX_Int, n,
+//                     JX_MEMORY_DEVICE, JX_MEMORY_HOST);
+//       jx_TFree(perm, JX_MEMORY_HOST);
+
+//       perm = d_perm;
+//       if (perm_is_qperm)
+//       {
+//          qperm = d_perm;
+//       }
+//       else
+//       {
+//          d_qperm = jx_TAlloc(JX_Int, n, JX_MEMORY_DEVICE);
+//          jx_TMemcpy(d_qperm, qperm, JX_Int, n,
+//                        JX_MEMORY_DEVICE, JX_MEMORY_HOST);
+//          jx_TFree(qperm, JX_MEMORY_HOST);
+
+//          qperm = d_qperm;
+//       }
+//    }
+
+//    /* Set output pointers */
+//    *permp  = perm;
+//    *qpermp = qperm;
+
+//    /* Free memory */
+//    jx_CSRMatrixDestroy(G);
+//    jx_TFree(G_perm, JX_MEMORY_HOST);
+//    jx_TFree(perm_temp, JX_MEMORY_HOST);
+//    jx_TFree(rqperm, JX_MEMORY_HOST);
+
+//    jx_GpuProfilingPopRange();
+//    JX_ANNOTATE_FUNC_END;
+
+//    return jx_error_flag;
+// }
+
+// JX_Int
+// jx_ILUGetLocalPerm(jx_ParCSRMatrix  *A,
+//                       JX_Int          **perm_ptr,
+//                       JX_Int           *nLU,
+//                       JX_Int            reordering_type)
+// {
+//    /* get basic information of A */
+//    JX_Int             num_rows = jx_ParCSRMatrixNumRows(A);
+//    jx_CSRMatrix      *A_diag = jx_ParCSRMatrixDiag(A);
+
+//    /* Local variables */
+//    JX_Int            *perm = NULL;
+
+//    /* Compute local RCM ordering on the host */
+//    if (reordering_type != 0)
+//    {
+//       jx_ILULocalRCM(A_diag, 0, num_rows, &perm, &perm, 1);
+//    }
+
+//    /* Set output pointers */
+//    *nLU = num_rows;
+//    *perm_ptr = perm;
+
+//    return jx_error_flag;
+// }

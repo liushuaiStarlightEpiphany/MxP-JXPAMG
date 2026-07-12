@@ -1,0 +1,142 @@
+#========================================================================#
+#  JXPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        #
+#  Institute of Applied Physics and Computational Mathematics            #
+#  School of Mathematics and Computational Science Xiangtan University   #
+#  peghoty@163.com   (Zhou Zhiyang)                                      #
+#  xwxu@iapcm.ac.cn  (Xu Xiaowen)                                        #
+#  yuexq1111@163.com (Yue Xiaoqiang)                                     #
+#========================================================================#
+
+# Created by peghoty 2011/09/022
+# Modified by Yue Xiaoqiang on 2012/10/22
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# JXPAMG directory and MPI diectory
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JXPAMGDIR = /home/yuexq/JXPAMG/trunk
+MPIDIR    = /usr/local/mpich2-1.3.2p1.gnu
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Debug [YES] or not [#YES]
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_DEBUG = YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Use the OpenMP parallelism [YES] or not [#YES]
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_USE_OPENMP = YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Use big-int, big-double, complex structures [YES] or not [#YES]
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_USE_BIG_INT = #YES
+JX_USE_BIG_DOUBLE = #YES
+JX_USE_COMPLEX = #YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# suffixes
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+.SUFFIXES:.c .f90 .f .for
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# compiler
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#FC = mpif90
+#CC = mpicc
+
+ifdef JX_USE_OPENMP
+FC = $(MPIDIR)/bin/mpif90 -fopenmp
+CC = $(MPIDIR)/bin/mpicc -fopenmp
+else
+FC = $(MPIDIR)/bin/mpif90
+CC = $(MPIDIR)/bin/mpicc
+endif
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# compile option
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#C_COMPILE_OPTION = -O -g -Wall
+#F_COMPILE_OPTION = -O -g -Wall
+#CDEFS  = 
+#FDEFS  = ${CDEFS}
+
+DEST := /usr/local/jxpamg-1.1
+
+ifdef JX_USE_OPENMP
+JX_OMP_CP_OPTION = -DJX_USING_OPENMP=1
+else
+JX_OMP_CP_OPTION = -DJX_USING_OPENMP=0
+endif
+
+ifdef JX_USE_BIG_INT
+JX_BIG_INT_OPTION = -DJX_USING_BIG_INT=1
+else
+JX_BIG_INT_OPTION = -DJX_USING_BIG_INT=0
+endif
+
+ifdef JX_USE_BIG_DOUBLE
+JX_BIG_DOUBLE_OPTION = -DJX_USING_BIG_DOUBLE=1
+else
+JX_BIG_DOUBLE_OPTION = -DJX_USING_BIG_DOUBLE=0
+endif
+
+ifdef JX_USE_COMPLEX
+JX_COMPLEX_OPTION = -DJX_USING_COMPLEX=1
+else
+JX_COMPLEX_OPTION = -DJX_USING_COMPLEX=0
+endif
+
+SPEC_COMPILE_OPT = ${JX_OMP_CP_OPTION} ${JX_BIG_INT_OPTION} ${JX_BIG_DOUBLE_OPTION} ${JX_COMPLEX_OPTION}
+
+ifdef JX_DEBUG
+C_COMPILE_OPTION = -O2 -Wall -g ${SPEC_COMPILE_OPT}
+F_COMPILE_OPTION = -O2 -Wall -g
+else
+C_COMPILE_OPTION = -O2 ${SPEC_COMPILE_OPT}
+F_COMPILE_OPTION = -O2
+endif
+CDEFS  = 
+FDEFS  = ${CDEFS}
+
+C_COMPILE_FLAGS = -fPIC -O2
+F_COMPILE_FLAGS = -fPIC -O2
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# include
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JXPAMGINCLUDES = -I ${JXPAMGDIR}/include
+MPIINCLUDES    = -I ${MPIDIR}/include
+AllCINCLUDES   = ${JXPAMGINCLUDES} ${MPIINCLUDES}
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# basic libs
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+MATHLIB = -lm
+CPPLIB  = -lstdc++
+MPILIB  = -L ${MPIDIR}/lib -lmpich
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# libs for building jxpamg lib
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+LIBS2JXPAMG = ${MPILIB} ${MATHLIB} ${CPPLIB}
+
+CFLAGS = ${CDEFS} ${C_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
+FFLAGS = ${FDEFS} ${F_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# rules for compiling the source files
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+.c.o:
+	${CC} -o $@ -c ${CFLAGS} $<
+.f.o:
+	${FC} -o $@ -c ${FFLAGS} $<
+.for.o:
+	${FC} -o $@ -c ${FFLAGS} $<
+.f90.o:
+	${FC} -o $@ -c ${FFLAGS} $<
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# all libs for running programs
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JXPAMGLIB  = -L ${JXPAMGDIR}/lib -lJXPAMG
+ALLLIBS    =  ${JXPAMGLIB} ${LIBS2JXPAMG}

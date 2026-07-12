@@ -1,0 +1,35 @@
+//========================================================================//
+//  JXPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
+//  Institute of Applied Physics and Computational Mathematics            //
+//  School of Mathematics and Computational Science Xiangtan University   //
+//========================================================================//
+
+/* Created by peghoty 2012/03/08 */
+/* Modified by Yue Xiaoqiang 2012/10/22 */
+
+———————————————————————————————————————————————————————————————————————————
+
+-- par_laplace.c     | solver_laplace.c 的子函数
+
+-- solver_laplace.c  | 并行解法器示例程序, 扩散方程的有限差分离散
+                       (2d5pt,3d7pt,2d9pt,3d27pt), 强可扩展性
+
+-- solver_strong.c   | 并行解法器示例程序, 从文件读入线性系统, 强可扩展性
+
+-- solver_weak.c     | 求解多个独立离散系统的并行算法, 弱可扩展性
+
+———————————————————————————————————————————————————————————————————————————
+
+
+
+
+
+
+
+
+
+
+
+
+
+

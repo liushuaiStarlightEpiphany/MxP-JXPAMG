@@ -1,0 +1,945 @@
+//========================================================================//
+//  JXPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
+//  Institute of Applied Physics and Computational Mathematics            //
+//  School of Mathematics and Computational Science Xiangtan University   //
+//========================================================================//
+
+* 2024/02/22, Changsha, Runzhang Mao
+---------------------------------------
+	- 添加csrc/hx和example/hx_driver.c文件用于测试
+   - 修改makefile.pub: 
+      - 添加hwloc开关, 默认关闭
+      - 添加mumps和blas开关, 默认关闭
+      - 添加MiniBranRAP开关
+   - 添加MiniBranRAP, 默认打开
+   - 添加SplitRAP, 默认关闭
+   - 添加hoAllreduce, 默认关闭, 需要hwloc的支持
+
+* 2022/09/15, Beijing, Huang Silu
+---------------------------------------
+	-增加testing文件夹，用作测试
+
+* 2020/02/13, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 添加asetup-AMG.
+    修改文件: include/jx_util.h,
+              include/jx_pamg.h,
+              csrc/amg/par_amg.c
+    添加文件: include/jx_asetup.h,
+              csrc/amg/par_asetup.c
+
+* 2020/02/13, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 添加复数基本运算.
+    修改文件: include/jx_util.h,
+              makefile.pub
+    添加文件: csrc/utilities/complex.c
+
+* 2019/11/03, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 添加求解多群问题的APCTL与两种Schur补预条件子.
+    修改文件: include/jx_apctl.h,
+              csrc/apctl下所有c文件
+ 2. 添加Flexible型GMRES法.
+    添加文件: csrc/krylov/pflexgmres.c
+    修改文件: include/jx_krylov.h
+
+* 2019/02/12, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 添加基于经典Gram-Schmidt的通信更少的GMRES法 (COGMRES).
+    添加文件: csrc/krylov/pcogmres.c
+    修改文件: include/jx_krylov.h,
+              include/jx_mv.h,
+              csrc/krylov/krylov.c,
+              csrc/operation/vecops下所有c文件
+
+* 2018/12/21, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修正AMG的Setup阶段关于多函数分支的bug.
+    修改文件: csrc/amg/par_amg_setup.c
+ 2. 添加AMG的Setup阶段中粗网格矩阵的打印控制, 成员为print_coarse_matrix.
+    修改文件: include/jx_pamg.h,
+              csrc/amg/par_amg.c,
+              csrc/amg/par_amg_setup.c
+
+* 2018/07/30, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. AMG结构体添加新成员AIR_strong_th, 控制限制算子的强连通关系.
+    修改文件: include/jx_pamg.h,
+              csrc/amg/par_amg.c,
+              csrc/amg/par_status.c,
+              csrc/amg/par_amg_setup.c
+ 2. 修改CSR矩阵的input格式, 支持行、列指标从0或1开始.
+    修改文件: include/jx_ilu.h,
+              include/jx_combined.h,
+              include/jx_mv.h,
+              csrc/ilu/par_csr_matrix.c,
+              csrc/combined/par_csr_matrix.c,
+              csrc/mat_vec_data/seq_csr_matrix.c,
+              csrc/mat_vec_data/par_csr_matrix.c
+ 3. AMG结构体添加新成员AIR_maxsize_ls，存放生成AIR时各网格层求解稠密矩阵的最大规模.
+    修改文件: include/jx_pamg.h,
+              csrc/amg/par_amg.c,
+              csrc/amg/par_amg_setup.c,
+              csrc/amg/par_restr.c,
+              csrc/amg/par_status.c
+
+* 2018/07/06, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 添加AIR型AMG法.
+    添加文件: csrc/amg/par_restr.c,
+              csrc/amg/par_interp_100.c,
+              csrc/operation/blas/*.c *.h,
+              csrc/operation/lapack/*.c *.h,
+              include/jx_blas2.h,
+              include/jx_lapack2.h
+    修改文件: include/jx_pamg.h,
+              include/jx_util.h,
+              csrc/amg/par_amg_setup.c,
+              csrc/amg/par_status.c,
+              csrc/amg/par_strength.c,
+              Makefile,
+              example/solver_strong.c
+
+* 2018/06/09, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 若网格层数为1时, AMG变为一次用户指定的光滑子.
+    修改文件: include/jx_pamg.h,
+              csrc/amg/par_amg.c,
+              csrc/amg/par_cycle.c
+ 2. 消除非OpenMP情形的警告.
+    修改文件: example/solver_laplace.c,
+              example/solver_strong.c
+ 3. 消除ai_measure_type=1情形的内存泄露.
+    修改文件: csrc/amg/par_amg_setup.c
+
+* 2018/01/15, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 添加Matvec模块计算时间的统计.
+    添加文件: csrc/utilities/set.c
+    修改文件: include/jx_util.h,
+              csrc/operation/mvops/par_csr_matvec.c
+
+* 2018/01/05, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. AMG结构体中增加2个控制变量: rap2, keepTranspose.
+    修改文件: include/jx_pamg.h,
+             include/jx_mv.h,
+             csrc/amg/par_amg.c,
+             csrc/amg/par_amg_setup.c,
+             csrc/operation/matops/par_rap.c,
+             csrc/mat_vec_data/par_csr_matrix.c,
+             csrc/operation/mvops/par_csr_matvec.c,
+             csrc/operation/matops/seq_csr_matop.c,
+             csrc/operation/matops/par_csr_matop.c,
+             example/solver_weak.c,
+             example/solver_strong.c
+ 2. 修正OpenMP的宏定义,并消除编译警告.
+    修改文件: csrc/operation/matops/par_csr_matop.c,
+              csrc/operation/matops/seq_csr_matop.c,
+              csrc/mat_vec_data/ij_matrix.c,
+              csrc/mat_vec_data/ij_vector.c
+ 3. 将AI-AMG的磨光中基本运算模块调整到csrc/operation/relaxations下.
+    添加文件: csrc/amg/par_relax_if_ai.c
+    修改文件: include/jx_mv.h,
+              include/jx_pamg.h,
+              csrc/operation/relaxations下所有c文件
+
+* 2018/01/01, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 消除警告"被设定但未被使用".
+    修改文件: csrc/amg/par_itersolver_ai.c,
+             csrc/amg/par_status.c,
+             csrc/amg/par_interp_6.c,
+             csrc/amg/par_cycle.c,
+             csrc/amg/par_interp_7.c,
+             csrc/amg/par_csolver.c,
+             csrc/amg/par_measure_ai.c,
+             csrc/amg/par_amg_setup.c,
+             csrc/amg/par_interp_8.c,
+             csrc/krylov/pgmres.c,
+             csrc/krylov/pbicgstab.c,
+             csrc/mat_vec_data/par_csr_matrix.c,
+             csrc/mat_vec_data/ij_matrix.c,
+             csrc/multils/krylov.c,
+             csrc/multils/matvec.c,
+             csrc/apctl/submat.c,
+             csrc/apctl/jasminIF.c,
+             csrc/apctl/relax.c,
+             csrc/apctl/coarseop.c,
+             csrc/euclid/mat_gen_fd_dh.c,
+             csrc/operation/matops/par_rap_omp.c,
+             csrc/operation/relaxations/par_relax_*.c
+ 2. 增加big-int和big-double及io函数, 以支持超20亿自由度的计算.
+    添加文件: csrc/utilities/printf.c,
+             csrc/utilities/mpistubs.c
+    修改文件: csrc/*/*.c,
+             include/*.h,
+             CMakeLists.txt,
+             makefile.pub,
+             example/*.c
+    今后 (1) MPI_*函数 ==> jx_MPI_*     注意: MPI_*类型不变； 
+         (2) printf等io函数 ==> jx_printf
+
+* 2016/03/08, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 修改了迭代过程中基于收敛因子阈值退出的判断位置. 修改了文件: csrc/krylov/pgmres.c 
+
+* 2016/03/04, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 修改了AMG中打印信息的条件. 修改了文件: csrc/amg/par_amg_setup.c 
+
+* 2016/02/20, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 显示记录自适应组合型PGMRES法中AMG,ILU和Bco各自的迭代次数, 并增加相应的获取迭代次数接口函数.
+    修改文件: include/jx_krylov.h, csrc/krylov/pgmres.c
+
+* 2016/01/31, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在 amg_solve 中, 把调用jx_CoarsestSolver的条件从 (max_levels == 1 || num_levels ==1) 改为 (max_levels == 1).
+
+* 2016/01/27, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 整理example的所有例程, 以及cmake下make test仅测试solver_laplace.
+    删除目录: example/apctl-jasminIF, example/multils, example/solvers
+    添加目录: example/input
+    添加文件: example/par_laplace.c, example/solver_laplace.c,
+             example/solver_strong.c,
+             example/solver_weak.c,
+             example/readme, example/makefile
+    修改文件: CMakeLists.txt, include/jx_mv.h
+
+* 2016/01/07, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 将csrc/utilities/tmpops内的模块融到example下.
+    删除目录: csrc/utilities/tmpops
+    添加文件: example/solvers/par_rdmvec.c
+    修改文件: example/solvers/makefile, include/jx_mv.h
+ 2. 解决cmake后make test的Failed问题
+    添加目录: example/apctl-jasminIF/input
+    添加文件: example/apctl-jasminIF/readme
+    修改文件: example/apctl-jasminIF/driver.c, CMakeLists.txt
+
+* 2015/12/17, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 采用cmake方式编译, 原来makefile方式仍然可用:
+    增加文件: CMakeLists.txt, readme.cmake
+    增加脚本目录: scripts/ 
+
+* 2015/12/16, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 增加目录: csrc/utilities/tmpops,
+    将部分基本运算模块调整到csrc/utilities/tmpops, 并将基本运算模块的函数声明调至include/jx_mv.h.
+    修改文件: Makefile, include/jx_mv.h, include/jx_pamg.h,
+             csrc/operation/matops下所有c文件,
+             csrc/operation/relaxations下所有c文件,
+             csrc/operation/vecops下所有c文件
+
+* 2015/11/28, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 添加IJ_Matrix的生成、组装等模块, 并对ParCSRMatrix中的部分模块更改接口.
+    修改文件: include/jx_util.h, include/jx_mv.h,
+             csrc/utilities/thread.c, csrc/utilities/error.c,
+             csrc/communication/new_commpkg.c, csrc/mat_vec_data/par_csr_matrix.c
+             csrc/mat_vec_data/seq_csr_matrix.c
+    增加文件: csrc/mat_vec_data/ij_matrix.c, csrc/mat_vec_data/ij_vector.c
+
+* 2015/10/09, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 删除example/laplace目录, 修改example/solver/下面的文件名称.
+
+* 2015/10/08, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 调整了目录结构, 新建了csrc/mat_vec_data, 在operation中的内容分到新建的4个子目录中.
+ 将csrc/seq_csr_mv 和 csrc/par_csr_mv 目录中的内容移到上述5个目录中.
+ 其中csrc/mat_vec_data/par_laplace.c 移到 example/laplace/中
+ 同时修改了Makefile等相关文件.
+ 具体修改包括:
+
+ 1. 删除目录: csrc/seq_csr_mv, csrc/par_csr_mv
+    增加目录: csrc/mat_vec_data
+    修改文件: include/jx_mv.h, Makefile
+    将 seq_csr_mv 和 par_csr_mv 均改为 mat_vec_data.
+
+ 2. 修改文件: include/jx_mv.h
+    将目录 csrc/mat_vec_data 下的 seq_csr_matop.c, seq_csr_matvec.c,
+    par_csr_matop.c 移到目录 csrc/operation,
+    并将目录 csrc/mat_vec_data 下的 par_laplace.c 移出目录 csrc.
+
+ 3. 修改文件: csrc/mat_vec_data/par_csr_matrix.c
+             csrc/operation/par_csr_matop.c
+             csrc/mat_vec_data/seq_csr_matrix.c
+             csrc/operation/seq_csr_matop.c
+    将 jx_ParCSRMatrixCopy 移入 csrc/operation/par_csr_matop.c
+    将 jx_CSRMatrixCopy 移入 csrc/operation/seq_csr_matop.c
+
+ 4. 修改文件: csrc/mat_vec_data/par_vector.c
+              csrc/mat_vec_data/seq_vector.c
+    增加文件: csrc/operation/par_vecop.c, csrc/operation/seq_vecop.c
+    删除文件: csrc/operation/par_axpy.c, csrc/operation/par_norm2.c
+    将串、并行向量的基本运算移入 csrc/operation/par_vecop.c.
+
+ 5. 增加目录: csrc/operation/matops, csrc/operation/mvops
+             csrc/operation/relaxations, csrc/operation/vecops
+    修改文件: Makefile
+    将目录 csrc/operation 中的文件按功能分成 4 个子目录.
+
+ 6. 修改目录: csrc/operation
+    将该目录下所有的 include/jx_smp_forloop.h 改为 ../include/jx_smp_forloop.h.
+
+* 2015/10/06, Beijing, Xiaowen Xu
+---------------------------------------
+ 1. 删除目录: csrc/bakkrylov
+
+* 2015/09/30, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 增加文件: csrc/operation/par_rap_omp.c
+    将 jx_PAMGBuildCoarseOperator1 从 csrc/operation/par_rap.c 文件移到par_rap_omp.c
+    并将其改名为 jx_PAMGBuildCoarseOperatorOMP.
+    修改文件: include/jx_pamg.h, csrc/amg/par_amg_setup.c, csrc/operation/par_rap.c
+
+ 2. 修改文件: include/jx_pamg.h, csrc/amg/par_amg.c,
+             csrc/amg/par_amg_setup.c, csrc/amg/par_cycle.c
+    对 PAMG 中‘核心‘运算模块增加计时, 默认不计时, 若 JX_PAMGSetWallTimeOption(amg_solver, 1), 则计时.
+
+ 3. 修改文件: csrc/amg/par_itersolver.c
+    将内部的 Relaxation 代码直接调用 csrc/operation 目录下的 Relaxation 函数.
+
+* 2015/09/20, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: include/jx_pamg.h
+    增加函数jx_PAMGRelax0,1,2,3,4,5,6,7,9的声明.
+
+ 2. 将 csrc/operation/par_relax.c 移到 csrc/amg/par_relax.c
+    将 csrc/operation/par_relax_if.c 移到 csrc/amg/par_relax_if.c
+
+* 2015/09/17, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: csrc/krylov/pgmres.c
+    修正 b_norm=0 的‘浮点越界‘的错误.
+
+ 2. 修改文件: include/jx_ilu.h,
+             csrc/ilu/par_vector.c, csrc/ilu/vector.c,
+             csrc/ilu/ilucycle.c, csrc/ilu/par_csr_matrix.c,
+             csrc/ilu/ilu.c, csrc/ilu/csr_matrix.c, csrc/ilu/decomposition.c,
+             include/jx_combined.h,
+             csrc/combined/combined.c, csrc/combined/csr_matrix.c
+    将‘群数‘调整为‘方程个数‘.
+
+ 3. 修改文件: csrc/ilu/grid.c
+    将并行ILU(0)中的进程分划由‘先x后y‘调整为‘先y后x序‘.
+
+ 4. 修改文件: Makefile
+    增加‘communication’和‘operation’两个目录.
+
+ 5. 修改文件: csrc/par_csr_mv/par_vector.c, csrc/seq_csr_mv/vector.c
+
+ 6. 增加目录csrc/operation/, 作为基本运算模块.
+    增加文件: csrc/operation/par_axpy.c,  csrc/operation/par_norm2.c
+    将 csrc/amg/par_rap.c 移到 csrc/operation/par_rap.c
+    将 csrc/amg/par_relax.c 拆分并移到 csrc/operation/par_relax*.c 和 csrc/operation/par_gs*.c
+    将 csrc/par_csr_mv/par_csr_matvec.c 移到 csrc/operation/par_csr_matvec.c
+
+ 7. 增加目录csrc/communication/, 作为通信模块.
+    将 csrc/par_csr_mv/new_commpkg.c 移到 csrc/communication/new_commpkg.c
+    将 csrc/par_csr_mv/par_csr_com.c 移到 csrc/communication/par_csr_com.c
+
+* 2015/08/30, Beijing, Yue Xiaoqiang
+---------------------------------------
+ 1. 增加文件: csrc/ilu/grid.c
+    修改文件: include/jx_combined.h, csrc/combined/combined.c,
+             include/jx_ilu.h, csrc/ilu/ilu.c,
+             csrc/ilu/ilusetup.c, csrc/ilu/decomposition.c,
+             csrc/ilu/par_csr_matrix.c, csrc/ilu/ilucycle.c
+    增加并行自适应组合型预条件子, 其中ILU要求自由度的排序方式为按‘先x后y且节点优先‘.
+
+* 2015/08/24, Beijing, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: csrc/utilities/array.c, include/jx_util.h
+    增加实型二维和三维数组的开设和释放函数.
+
+ 2. 修改文件: csrc/seq_csr_mv/vector.c
+    增加jx_SeqVecZXY和jx_SeqVecMul的OpenMP制导语句.
+
+ 3. 修改文件: csrc/utilities/array.c, include/jx_util.h,
+             csrc/ilu/par_csr_matrix.c, include/jx_ilu.h,
+             include/jx_combined.h, csrc/combined/combined.c,
+             csrc/krylov/pgmres.c, include/jx_krylov.h,
+             csrc/combined/amg_euclid.c, csrc/combined/amg_ilu.c,
+             csrc/ilu/ilusetup.c, example/solvers/driver.c
+    增加并行自适应组合型预条件子, 其中ILU选用Euclid库.
+
+* 2015/08/16, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_amg_setup.c
+    对于非AI类的粗化, 在打印选项打开的情形下，也计算 measure_ai 的信息.
+
+* 2015/08/16, Beijing, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_status.c
+    添加基于AI粗化策略的打印信息.
+ 2. 修改文件: csrc/amg/par_amg_setup.c
+    对jx_PAMG添加基于AI粗化策略的aggressive粗化.
+ 3. 修改文件: example/solvers/driver.c, example/solvers/driver2.c
+    增加jx_PAMG关于ai_relax_type和ai_measure_type的命令行设值.
+    (如对编译driver2.c生成的zzy, 按下行运行:
+    ./zzy -n 64 64 64 -sid 22 -kdim 10 -agg_nl 1 -Pmx 5 -ct 98
+          -rlx 6 -ipt 6 -str 0.25 -amg_ptlv 3 -ai_rlx 1 -ai_mt 1)
+
+* 2015/08/14, Beijing, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_cycle.c. 消除该文件中导致编译警告的代码.
+ 2. 修改文件: include/jx_pamg.h, csrc/amg/par_amg.c
+    (结构体jx_ParAMGData增加成员agg_interp_type, agg_P_max_elmts,
+    agg_P12_max_elmts, agg_trunc_factor, agg_P12_trunc_factor, 并增加这些成员的数值设定函数)
+ 3. 修改文件: include/jx_pamg.h, csrc/amg/par_amg_setup.c, csrc/amg/par_strength.c
+    对jx_PAMG添加aggressive粗化及相应的multipass插值.
+ 4. 修改文件: csrc/amg/par_status.c
+    添加aggressive粗化及multipass插值等打印信息.
+ 5. 修改文件: example/solvers/driver.c, example/solvers/driver2.c
+    增加jx_PAMG的参数控制, 以便达到AMG法的最佳方案.
+    (如对编译driver2.c生成的zzy, 按下行运行:
+    ./zzy -n 64 64 64 -sid 22 -kdim 10 -agg_nl 1 -Pmx 5 -ct 10 -rlx 6 -ipt 6 -str 0.25 -amg_ptlv 3)
+
+* 2014/07/07, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_csolver.c
+    增加了打印信息的条件判断.
+
+* 2014/07/06, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 增加文件: csrc/combined/csr_matrix.c, csrc/combined/par_csr_matrix.c,
+             csrc/ilu/csr_matrix.c, csrc/ilu/par_csr_matrix.c,
+             csrc/ilu/par_vector.c, csrc/ilu/vector.c.
+    修改文件: csrc/par_csr_mv/par_csr_matrix.c, csrc/par_csr_mv/par_vector.c,
+             csrc/seq_csr_mv/csr_matrix.c, csrc/seq_csr_mv/vector.c,
+             include/jx_mv.h, include/jx_combined.h, include/jx_ilu.h.
+    非公共模块转移到特定目录内.
+ 2. 修改文件: include/jx_pamg.h, csrc/amg/par_amg.c, csrc/amg/par_cycle.c.
+    将ai_relax_type加入结构体jx_ParAMGData, 并增加设置函数, 默认值设为0.
+ 3. 修改文件: example/solvers/driver.c.
+    删除杂余的预条件子, 并在AMG加入ai_relax_type控制.
+
+* 2014/07/04, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_amg_setup.c.
+    恢复了2014/07/03中第1条, 通过将coarse_threshold_2 = -1, 达到2014/07/03中第1条目的.
+ 2. 修改文件: csrc/amg/par_cycle.c.
+    将ai_measure_type 改为 ai_relax_type, 并将其设置为0.
+
+* 2014/07/03, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_amg_setup.c.
+    为了与hypre的粗网格层相同, 注掉第81,92,157,588-590,850-852行.
+ 2. 修改文件: csrc/amg/par_cycle.c.
+    在函数jx_PAMGCycle增加ai_measure_type控制.
+ 3. 修改文件: csrc/amg/par_amg_solve.c.
+    在循环内令jx_ParAMGDataCycleOpCount(amg_data)=0, 使得仅计算一次cycle的复杂度.
+
+* 2014/07/1, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_csolver.c, 警告信息打印加了条件判断.
+
+* 2014/05/27, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: (1) include/jx_euclid.h; (2) 目录 csrc/euclid 下的所有文件; 
+              (3) csrc/combined/combined.c; (4) include/jx_combined.h
+    消除与hypre中函数的重定义, 每个宏名前加JX_, 函数名前加jx_, 结构体名前加jx_
+
+* 2014/05/24, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修改文件: include/jx_combined.h, csrc/combined/combined.c. 
+    消除组合型预条件子中Euclid库对命令行参数的要求:
+    (1) 增加宏JX_EUCLID_ERRCHKB,并关闭ENABLE_EUCLID_LOGGING.
+    (2) 修改函数JX_CombinedPrecondDataInitialize和jx_CombinedPrecondDataInitialize,
+        将它们的入口中argc与argv调整为level,原有函数命名为JX_CombinedPrecondDataInitializeP和jx_CombinedPrecondDataInitializeP.
+    (3) 增加函数JX_CombinedPrecondDataSetEuclidLevel.
+    (4) 在example/solvers/driver.c中,消除带有Euclid的迭代法中对argc和argv的依赖.
+ 2. 修改了makefile.pub中关于OpenMP的编译选项.
+
+* 2014/05/22, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 修改文件: csrc/amg/par_relax_ai.c. 消除该文件中导致编译警告的代码.
+
+* 2014/04/09, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 增加按自由度或物理量重新排列模块(目前仅适用于多群扩散与电子-离子耦合方程的类型)
+    (1) 修改文件: include/jx_mv.h,csrc/seq_csr_mv/vector.c,csrc/seq_csr_mv/csr_matrix.c,
+                 csrc/par_csr_mv/par_vector.c,csrc/par_csr_mv/par_csr_matrix.c
+        (增加函数jx_VectorTDMGReorderByNodes和jx_VectorTDMGReorderByVariables,
+         jx_VectorTDMGReorderAlongX和jx_VectorTDMGReorderAlongY,
+         jx_CSRMatrixTDMGReorderByNodes和jx_CSRMatrixTDMGReorderByVariables,
+         jx_CSRMatrixTDMGReorderAlongX和jx_CSRMatrixTDMGReorderAlongY,
+         jx_BuildMatParFromOneFile2和jx_BuildRhsParFromOneFile2)
+
+ 2. 将jx_PAMGSolve中关于Solve阶段的信息调至jx_PAMGSetup中打印
+    (1) 修改文件: csrc/amg/par_amg_solve.c,csrc/amg/par_amg_setup.c
+        (函数jx_PAMGSolve和jx_PAMGSetup)
+
+ 3. 修正了自适应PGMRES中的一个Bug, 元素值rs[0]需要改回原值
+    (1) 修改文件csrc/krylov/pgmres.c中函数jx_GMRESAdaptiveSolve
+
+ 4. 增加按块分划矩阵模块 (负载平衡性会差于按行分划)
+    (1) 修改文件: include/jx_mv.h,csrc/par_csr_mv/par_csr_matrix.c
+        (增加函数jx_BuildMatParFromOneFile3,jx_CSRMatrixToParCSRMatrix2,
+                jx_ParCSRMatrixCreate2和jx_GeneratePartitioning2)
+
+ 5. 增加串行矩阵的对称化模块及从文件中读入原矩阵的对称化矩阵
+    (1) 修改文件: include/jx_mv.h,csrc/seq_csr_mv/csr_matop.c
+        (增加函数jx_CSRMatrixAdd,jx_CSRMatrixScale和jx_CSRMatrixSymmetrization)
+    (2) 修改文件: include/jx_mv.h,csrc/par_csr_mv/par_csr_matrix.c
+        (增加函数jx_BuildMatParFromOneFile4)
+
+ 6. 增加一种组合型预条件子AMG-Euclid-AMG, 这里Euclid针对A的对称化矩阵(A+A^T)/2
+    (1) 修改文件: include/jx_combined.h,csrc/combined/combined.c,csrc/combined/amg_euclid.c
+        (结构体jx_CombinedPrecondData增加成员pre_euc_mat,
+        增加函数JX_CombinedPrecondDataSetPreEucMat,jx_CombinedPrecondDataSetPreEucMat,
+               JX_PAMGEuclidPAMGSetupB和jx_PAMGEuclidPAMGSetupB)
+
+* 2014/04/03, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 调整serial AMG+serial ILU(0)为parallel AMG+serial ILU(0)
+    (1) 修改文件: include/jx_combined.h,csrc/combined/combined.c
+        (增加函数JX_CombinedPrecondDataSetILUMatA和jx_CombinedPrecondDataSetILUMatA)
+    (2) 修改文件: include/jx_ilu.h, csrc/ilu/ilu.c,
+                 csrc/ilu/ilusetup.c, csrc/ilu/ilucycle.c
+        (jx_ILUZeroFactorData中增加成员matA, 仅在0号进程,
+         增加函数JX_ILUZeroFactorDataSetMatA和jx_ILUZeroFactorDataSetMatA)
+
+* 2014/03/24, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 增加一种自适应的组合型预条件GMRES法:
+    (1) 修改文件: include/jx_krylov.h
+        (jx_GMRESData中增加成员resdown_0_threshold和convfac_threshold_2, 初始值均设为0.1)
+    (2) 修改文件: csrc/krylov/pgmres.c
+        (增加函数JX_GMRESSetResDownZeroThreshold,jx_GMRESSetResDownZeroThreshold,
+                JX_GMRESSetConvFacThresholdTwo,jx_GMRESSetConvFacThresholdTwo,
+                JX_GMRESAdaptiveSolve和jx_GMRESAdaptiveSolve)
+
+ 2. 增加串行ILU(0)预条件子:
+    (1) 增加目录: csrc/ilu
+    (2) 增加文件: include/jx_ilu.h
+    (3) 修改文件: Makefile, 增加CSRCDIR11.
+
+ 3. 增加部分基本运算的OpenMP指导语句, 并增加数组复制等基本运算:
+    (1) 修改文件: csrc/seq_csr_mv/vector.c
+    (2) 修改文件: csrc/utilities/array.c
+        (增加函数jx_IntegerArrayCopy,jx_DoubleArrayCopy和jx_DoubleArrayReciprocalMap)
+
+ 4. 将ILU(0)增加到组合型预条件子
+    (1) 修改文件: csrc/combined/combined.c,include/jx_combined.h
+        (增加函数JX_CombinedPrecondDataSetDropTol,jx_CombinedPrecondDataSetDropTol
+                JX_CombinedPrecondDataGetLULength,jx_CombinedPrecondDataGetLULength)
+    (2) 增加文件: csrc/combined/amg_ilu.c
+
+ 5. 在example/solvers/driver.c中增加上述预条件子的Krylov子空间迭代法.
+
+* 2014/03/06, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 消除警告信息:
+    (1) 修改文件: csrc/amg/par_coarsen_ruge_ai.c, csrc/amg/par_measure_ai.c,
+                 csrc/amg/par_cycle.c, csrc/amg/par_csolver.c, csrc/amg/par_relax_ai.c
+
+ 2. 添加对流扩散问题经三维七点格式离散:
+    (1) 修改文件: csrc/par_csr_mv/par_laplace.c
+        (增加函数jx_GenerateParConvecDiff和jx_BuildParConvecDiff)
+    (2) 修改文件: example/solvers/driver2.c
+        (增加DiagScale和Euclid的Krylov子空间迭代法)
+
+ 3. 修正无OpenMP编译时的bug, 此时仅需调整makefile.pub中的‘FC‘,‘CC‘和‘JX_OMP_CP_OPTION‘即可.
+    (1) 修改文件: include/jx_util.h, include/jx_smp_forloop.h,
+                 csrc/utilities/thread.c, example/solvers/driver*.c
+
+* 2014/02/27, Beijing, Xu Xiaowen
+---------------------------------------
+1. 在AMG Setup 中, 对基于 AI 的粗化策略, 强制将 ai_measure_type = 1.  
+   (1) 修改文件: csrc/amg/par_amg_setup.c
+
+* 2014/02/26, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 屏蔽ParaSails库(为了不依赖blas和lapack库). 相应修改如下:
+    (1) 删除目录: csrc/parasails.
+    (2) 删除文件: include/jx_parasails.h, csrc/combined/amg_parasails.c
+    (3) 修改文件: csrc/combined/combined.c, include/jx_combined.h
+    (3) 修改文件: example/solvers/driver.c (删除了对ParaSails的调用)
+    (4) 修改文件: Makefile, makefile.pub
+
+ 2. 添加DiagScale预条件子:
+    (1) 增加目录: csrc/diagscale 
+    (2) 增加文件: include/jx_diagscale.h
+    (3) 修改文件: example/solvers/driver.c (增加DiagScale的Krylov子空间迭代法)
+
+ 3. 在jx_ParAMGData增加成员ai_measure_type: 
+    (1) 修改文件: csrc/amg/par_amg.c 
+        (jx_PAMGCreate函数中将ai_measure_type设置为0, 增加接口函数jx_PAMGSetAIMeasureType和JX_PAMGSetAIMeasureType)
+    (2) 修改文件: include/jx_pamg.h 
+        (函数jx_PAMGSetAIMeasureType和JX_PAMGSetAIMeasureType的声明)
+    (3) 修改文件: csrc/amg/par_amg_setup.c 
+        (jx_PAMGSetup函数中增加ai_measure_type的控制, 若其值为1, 则执行AI-AMG, 否则执行不含AI的JX_PAMG)
+    (4) 修改文件: csrc/combined/combined.c (jx_CombinedPrecondDataInitialize函数中设置ai_measure_type均取值为0)
+
+ 4. 调整 AI_measure_arrays的释放方式: 
+    (1) 修改文件: csrc/amg/par_amg.c
+
+ 5. 修改文件: example/solvers/driver.c （调整nthreads设定的位置)
+
+ 6. 修改文件: csrc/amg/par_measure_ai.c 
+    (在 jx_PAMGMeasureAI 函数中增加对 par_ST,int_buf_data, buf_data,measure_dep_2和measure_inf的释放)
+
+* 2014/01/09, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 在Makefile中增加CSRCDIR08-CSRCDIR10.
+ 2. 在makefile.pub中增加blas和lapack库.
+ 3. 添加ParaSails库: 增加文件
+    include/jx_parasails.h,
+    csrc/parasails/conjgrad.c,
+    csrc/parasails/diagscale.c,
+    csrc/parasails/fgmres.c,
+    csrc/parasails/hash.c,
+    csrc/parasails/jx_parasails.c,
+    csrc/parasails/loadbal.c,
+    csrc/parasails/matrix.c,
+    csrc/parasails/mem.c,
+    csrc/parasails/numbering.c,
+    csrc/parasails/orderstat.c,
+    csrc/parasails/parasails.c,
+    csrc/parasails/prunedrows.c,
+    csrc/parasails/rowpatt.c,
+    csrc/parasails/storedrows.c.
+ 4. 添加Euclid库: 增加文件
+    include/jx_euclid.h,
+    csrc/euclid/blas_dh.c,
+    csrc/euclid/euclid_apply_dh.c,
+    csrc/euclid/euclid_dh.c,
+    csrc/euclid/external_rows_dh.c,
+    csrc/euclid/factor_dh.c,
+    csrc/euclid/get_row_dh.c,
+    csrc/euclid/global_objects_dh.c,
+    csrc/euclid/hash_dh.c,
+    csrc/euclid/hash_i_dh.c,
+    csrc/euclid/ilu_mpi_bj_dh.c,
+    csrc/euclid/ilu_mpi_pilu_dh.c,
+    csrc/euclid/ilu_seq_dh.c,
+    csrc/euclid/io_dh.c,
+    csrc/euclid/krylov_dh.c,
+    csrc/euclid/mat_dh.c,
+    csrc/euclid/mat_gen_fd_dh.c,
+    csrc/euclid/mat_private_dh.c,
+    csrc/euclid/mem_dh.c,
+    csrc/euclid/numbering_dh.c,
+    csrc/euclid/parcsr_euclid.c,
+    csrc/euclid/parser_dh.c,
+    csrc/euclid/shell_sort_dh.c,
+    csrc/euclid/sig_dh.c,
+    csrc/euclid/sorted_list_dh.c,
+    csrc/euclid/sorted_set_dh.c,
+    csrc/euclid/subdomain_graph_dh.c,
+    csrc/euclid/time_log_dh.c,
+    csrc/euclid/timer_dh.c,
+    csrc/euclid/vec_dh.c,
+    并将csrc/euclid/parcsr_euclid.c中的函数声明放在jx_util.h, 见251-281行.
+ 5. 添加组合预条件子: 增加文件
+    include/jx_combined.h,
+    csrc/combined/amg_euclid.c,
+    csrc/combined/amg_parasails.c,
+    csrc/combined/combined.c.
+ 6. 在par_csr_matrix.c中增加函数
+    jx_ParCSRMatrixGetComm,
+    jx_ParCSRMatrixGetDims,
+    jx_ParCSRMatrixGetRow,
+    jx_ParCSRMatrixRestoreRow,
+    函数声明放到jx_mv.h中.
+ 7. 在csr_matrix.c中增加函数
+    jx_CSRMatrixWeaklyDiagDominant,
+    函数声明放到jx_mv.h中.
+ 8. 防止Fortran调用冲突, 定义jx_F90_NAME*, 见jx_util.h的77-79行.
+ 9. 在JX_PAMG中增加Euclid磨光.
+10. 在example/solvers/driver.c中增加上述预条件子的Krylov子空间迭代法.
+
+* 2013/12/15, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在AI-AMG中, 修改了代数界面影响值的计算方法.
+
+* 2013/11/24, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在par_amg_setup.c中, 修改了粗化停止的准则, 避免当 amg_coarse_threshold 太小时, 实际最粗网格的规模太小.
+  2. 在pgmres.c中, 将参数 is_check_restarted 的默认值由1改为0;
+
+* 2013/11/3, Shanghai, Xu Xiaowen
+---------------------------------------
+  1. 在par_amg_solve.c中, 修改调最粗网格算法的条件为"max_levels == 1 || num_levels ==1"
+
+* 2013/10/21, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在par_amg_solve.c中, 修改和整理了调用AI-prior smoothing策略的代码.
+  2. 在par_amg_solve.c, pgmres.c, pbicgstab.c 中,修改了当rhs_norm=0时的相对下降量的计算方法.
+
+* 2013/10/18, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在csrc/amg/par_csolver.c中, 将收敛检测放在一个新函数jx_check_convergence()中.
+     为此, 在include/jx_pamg.h中增加了该函数的说明.
+
+* 2013/09/12, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在par_amg_solve.c 和 par_amg_solve.c 中, 修改了通信器的获取方法. 之前采用MPI_COMM_WORLD通信器.
+     当应用通信器与MPI_COMM_WORLD不一致时(如JASMIN框架的克隆计算情形)报错(在memory.c中报Out of Memory的错误);
+  2. 在jx_CoarsestSolverInfo()中参加了通信器的参数.
+
+* 2013/06/12, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在单层情形迭代方法中增加了AI smoothing 策略, 增加了 csrc/amg/par_itersolver_ai.c 文件. 目前还没有调试.
+  2. 基于1, 修改了文件 csrc/amg/par_csolver.c 和 include/jx_pamg.h 
+
+* 2013/06/06, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 修改了 AI-AMG 算法中的measure_ai的计算方法.
+  2. 在amg目录下的par_strength.c中, 增加统计矩阵对角占优的信息. 这部分信息以后要以标准信息统计.
+
+* 2013/06/03, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 增加了 AI-AMG 算法, 包括AI based Coarsening strategy 和 AI based smoothing strategy.
+      coarsen_type = 990: CLJP_AI 
+      coarsen_type = 991: Ruge_AI
+      coarsen_type = 993: Ruge3_AI
+      coarsen_type = 96: Falgout_AI
+      coarsen_type = 98: PMIS_AI
+      coarsen_type = 910: HMIS_AI
+      relax_type = 93: HYBRID_AI
+     注: 目前, 只测试了 PMIS_AI 的效果(par_coarsen_pmis_ai.c)
+     添加或修改了相关的文件.
+     (a) 添加文件: csrc/amg 目录下: 
+         par_measure_ai.c, 
+         par_relax_ai.c, 
+         par_coarsen_ruge_ai.c, 
+         par_coarsen_cljp_ai.c, 
+         par_coarsen_falgout_ai.c, 
+         par_coarsen_pmis_ai.c, 
+         par_coarsen_hmis_ai.c, 
+         par_coarsen_xml.c
+     (b) 修改文件: 
+         include/jx_pamg.h, 
+         csrc/amg/par_amg.c, 
+         csrc/amg/par_amg_setup.c, 
+         csrc/amg/par_cycle.c, 
+         csrc/amg/par_relax.c
+
+* 2013/1/25, Beijing, Xu Xiaowen
+---------------------------------------
+  1. 在 Makefile 中增加了 install 的命令. 见 readme 文件.
+
+* 2013/1/24, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+  1. 将 JX_Matrix 和 JX_Vector 的声明由 jx_krylov.h 移到 jx_util.h, 并在jx_krylov.h中包含jx_util.h.
+
+* 2012/12/28, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修正了jx_PAMGBuildInterp和jx_PAMGBuildInterp1中
+    diagonal=0的处理方式, 并利用debug_flag修改了打印信息.
+
+* 2012/11/03, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修正了 memory.c 中 int 的 bug.
+ 2. 增加了根据内存自适应选取 GMRES(m) 法的回头数.
+
+* 2012/10/22, Xiangtan, Yue Xiaoqiang
+---------------------------------------
+ 1. 修正多线程开关, 增加多线程功能.
+ 2. 增加了扩散方程的有限差分离散的示例程序 (2d5pt,3d7pt,2d9pt,3d27pt).
+ 3. 增加了单进程多线程情形下的改进模块及其子模块.
+
+* 2012/08/26, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 在AMG 和 Krylov子空间迭代中, 修改了非循环中的break语法错误.
+
+* 2012/06/20, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 在Krylov子空间迭代中, 修改了迭代信息打印参数print_level的含义.
+
+================================================================
+- jxpamg-1.0 version -
+================================================================
+
+* 2012/03/27, Beijing, Xu Xiaowen
+---------------------------------------
+ 1. 根据20101206版本, 在Krylov子空间迭代中恢复了收敛因子阀值参数 convfac_threshold,
+    该参数在2011/10/08版本中关掉;
+
+* 2012/03/25, Xiangtan, Zhou Zhiyang
+---------------------------------------
+ 1. 在结构体 jx_APCTLKrylovParam 中增加成员 last_rel_nrm.
+ 2. 修正 apctl 迭代中前后磨光次数只能取 1,0 的 bug;
+ 3. 将统计子系统迭代次数的全局变量放到相应的结构体中.
+ 4. 在结构体 jx_APCTLKrylovParam 中增加统计各阶段(数据转换，Setup，Solve, Setup+Solve)
+    所需 CPU 时间的成员变量. 
+
+* 2012/03/07, Xiangtan, Zhou Zhiyang
+---------------------------------------
+ 1. 对基于进程分组的并行 PCTL 和 APCTL 预条件子进行了合并与代码重写，使得基于
+    该两个预条件子的 Krylov 子空间迭代法适合于被 JASMIN 框架的应用程序调用.
+ 2. 在目录 /example 下增加了名为 apctl-jasmin 的子目录，其中包含相应的示例程序.
+ 
+* 2011/11/08, Xiangtan, Zhou Zhiyang
+---------------------------------------
+ 1. 在 gmres 法中增加参数 is_check_restarted, 默认值取 1, 可通过函数
+ JX_GMRESSetConvFacThreshold(jx_GMRESSetConvFacThreshold)进行修改.
+
+* 2011/11/03, Xiangtan, Zhou Zhiyang
+ 1. 解决 APCTL 预条件子中的一个内存泄漏问题(见 /csrc/3t/apctl_sp.c 中的函数 
+    jx_3tAPCTLSetup_singlepro 关于释放串行向量 VRE_s, VER_s, VEI_s, VIE_s 的部分).
+
+* 2011/10/30, Xiangtan Zhou Zhiyang
+---------------------------------------
+ 1. 在 PCTL 预条件子中，对子矩阵 ARR, AEE, AII, ACC 的求解，增加 AMG-GMRES 解法器.
+ 2. 在 APCTL 预条件子中，对子矩阵 ARR 和 ACC 的求解，增加 AMG-GMRES 解法器.
+ 3. 将 APCTL 预条件子的示例程序(example/apctl)进行改造，使得 Setup 和 Solve 过程分离开且在示例程序中可见.
+ 4. 将关键词 "2d3t" ("2D3T") 修改为 "3t" ("3T"). 
+ 
+2011/10/24, Zhou Zhiyang, xiangtan 
+---------------------------------------
+ 1. 解决以 APCTL 和 PCTL 为预条件子的 PGMRES 法对某些系统不收敛的问题，具体调整如下：
+    (1) 对于 PCTL 预条件子, 在求解子矩阵 ARR 和 ACC 的 PAMG 法中, 将粗化类型由 Falgout 修改为 CLJP.
+    (2) 对于 APCTL 预条件子，当需要进行粗网格校正时，在求解子矩阵 ARR 的 PAMG 法中, 
+        将粗化类型由 Falgout 修改为 CLJP. 
+ 注: 经测试发现以上调整对某些离散系统仍然无效！        
+ 
+2011/10/17, Zhou Zhiyang, xiangtan 
+---------------------------------------
+ 1. 增加了 PCTL 预条件子.
+ 2. 将文件名 apctlgmres.c 改为 apctl_krylov, 将函数名 jx_ADAPTIVEPGMRES_2D3T，
+    jx_adaptivepgmres_2d3t 分别改为 jx_KrylovWithAPCTL_2D3T，jx_krylovwithapctl_2d3t，
+    并在结构体 jx_APCTLParam 中增加成员 krylo_id 和 two_norm，从而使得
+    自适应预条件子 APCTL 可以给 CG，GMRES, BiCGSTab 作预条件子.
+ 3. 将头文件 jx_pamg.h 拆分为 jx_pamg.h, jx_mv.h 和 jx_util.h.
+ 
+2011/10/08, Zhou Zhiyang, xiangtan
+----------------------------------------
+ 1. 对代码作了一次整理，将 jxpamg 的目录结构及代码的书写风格作了较大调整，使其更合理。
+ 2. 在目录 jxpamg/ 下重写了文件 Makefile, 同时增加文件 makefile.pub.
+ 3. 新增函数 JX_PAMGPrecond, jx_PAMGPrecond, 它们与 
+    JX_PAMGSolve, jx_PAMGSolve 的区别在于前者只进行固定次数的 Cycle,
+    而不进行残量计算及是否达到给定精度的判别，因此用该函数来作预条件子效率更高.
+ 4. 在结构体 jx_ParAMGData 中增加了成员 rhsnrm_threshold(默认值为 0.0)，该参数目前
+    仅对 conv_criteria = 0 的情形有效，其作用是根据右端向量的范数与该阀值的
+    大小关系确定选用相对参量范数或绝对残量范数来作为停机准则.
+ 5. 所有迭代法中暂时撤掉了收敛因子阀值参数 convfac_threshold.
+ 6. 暂时撤掉了 pcg 和 pgmres 中 conv_criteria = 1, 11, 2 的功能
+    (之前处理得不太好，以后写健壮再放进来！)
+ 7. 在目录 /csrc/ 下新增了子目录 2d3t, 该目录包含求解 2d3t 离散系统的 pctl 预条件子,
+    块对角预条件子, 块高斯预条件子以及自适应预条件子的并行实现.
+ 8. 与 7 对应的示例程序分别见 jxpamg/example/ 下的 2d3t 和 apctl 目录，其中
+     前者对应 pctl 预条件子, 块对角预条件子, 块高斯预条件子的示例程序， 
+     后者对应自适应预条件子的示例程序.
+ 
+================================================================
+--- jxpamg-0.0 version ---
+================================================================
+
+2011/6/20, Xu Xiaowen, Beijing
+----------------------------------------
+ 1. 将convfac_threshold的默认值由改为0.026 (amgdata/pamgdata.c).
+
+2011/1/22, Xu Xiaowen, Beijing
+----------------------------------------
+ 1. 将pgmres.c, pcg.c, pbicgstab.c, par_amg_solve.c中
+    的关键词"Hypre"改为"JXPAMG".
+ 2. 采用SVN管理JXPAMG, 进行版本控制. (xwxu, xxxxxx)
+
+
+2010/12/06, Zhou Zhiyang, Xiangtan
+----------------------------------------
+ 1. 增加了求解多个相互独立线性系统的并行解法器，为此增加的文件包括
+    include/par_multils.h
+    include/par_util.h
+    include/sersolver.h
+    multils/par_gls2ls.c
+    multils/par_glsdata.c
+    multils/par_lsdata.c
+    multils/par_mllssolve.c
+    multils/par_util.c
+    multils/sersolver.c
+ 2. 在目录 example/ex02 下增加了求解多个相互独立线性系统的并行解法器的示例程序.
+ 3. Makefile 中增加了目录 multils 下 C 程序的编译链接 OBJS_MULTILS = ...
+ 4. 将 RS 粗化算法里的 |= 改为 ！=.
+
+ 
+ 2010/12/3, Xu Xiaowen, Beijing
+----------------------------------------
+ 1. 在迭代收敛判断中, 基于 convfac_threshold 准则判断的同时, 
+    增加最小迭代次数的约束. 修改的文件包括: 
+    solve/par_amg_solve.c, krylov/pgmres.c, krylov/pbicgstab.c
+ 2. 修改了支持线程的jx_smp_forloop.h文件.
+
+
+ 2010/06/23, Zhou Zhiyang, Xiangtan
+----------------------------------------
+ 1. 在三种 Krylov 子空间迭代法 (pcg,pgmres,pbicgstab) 中分别增加了
+    三种收敛准则.
+ 2. 在所有迭代法中(相应结构体成员中)增加收敛因子阀值参数 convfac_threshold 及
+    相应的设置函数，起默认取值为 1.0.
+ 3. 为实现 1 和 2，新增以下函数：
+    int JX_PAMGSetConvFacThreshold
+    int JX_PCGSetConvCriteria
+    int JX_PCGSetConvFacThreshold
+    int jx_PCGSetConvCriteria
+    int jx_PCGSetConvFacThreshold
+    int JX_GMRESSetConvCriteria
+    int JX_GMRESSetConvFacThreshold
+    int jx_GMRESSetConvCriteria
+    int jx_GMRESSetConvFacThreshold
+    int JX_BiCGSTABSetConvCriteria
+    int JX_BiCGSTABSetConvFacThreshold
+    int jx_BiCGSTABSetConvCriteria
+    int jx_BiCGSTABSetConvFacThreshold
+ 4. /example/ex01 示例程序中增加一套测试线性代数系统(来自同性 2D Possion 问题的离散).
+
+
+ 2010/06/01, Xu Xiaowen, Beijing.
+-----------------------------------
+ 1. 修正了粗化策略RRS0代码coarsen_rrs0.c中的一个bug.
+    该bug使得 measure_type=0 时在多进程情形出错.
+
+ 2010/05/31, Zhou Zhiyang, Xiangtan.
+-------------------------------------
+ 1. 增加了两种并行粗化策略 RRS0 和 RCLJP (对应的 coarsen_type 值分别为 91，90), 
+    为此新增:
+    (1) 文件
+        /setup/coarsen_rrs0.c
+        /setup/coarsen_rcljp.c
+        /setup/indepset_relax.c
+ 
+    (2) 函数
+        int jx_PAMGCoarsenRCLJP
+        int jx_PAMGCoarsenRRS0
+        int JX_PAMGSetRelaxedCoarsenMeasureType
+        int JX_PAMGSetRelaxedCoarsenNumberSyn
+        int JX_PAMGSetRelaxedCoarsenMeasureThreshold
+        int jx_PAMGSetRelaxedCoarsenMeasureType
+        int jx_PAMGSetRelaxedCoarsenNumberSyn
+        int jx_PAMGSetRelaxedCoarsenMeasureThreshold
+        int jx_PAMGIndepSetRelaxInit
+        int jx_PAMGIndepSetRelax
+ 
+    (3) 结构体 jx_ParAMGData 中增加了以下 3 个成员
+        int     measure_type_rlx;      // 默认值为 1      
+        int     number_syn_rlx;        // 默认值为 2
+        double  measure_threshold_rlx; // 默认值为 0.8
+
+ 2. 删除了文件 par_interp_12.c 和 par_interp_13.c
+ 3. 删除了与能量极小插值有关的文件(par_interp_99.c,p_xulumil.for)，
+    (函数 jx_PAMGSetup 中的)代码，注释以及目录 /example 下配套的示例程序 Ex2
+ 4. 对目录 /example/ex01 下的示例程序 drive.c 做了部分修改.
+    如增加了测试时间程序段，对PAMG 中一些参数的选取做了较详细的说明.
+ 5. 在主目录下增加了 readme 文件。
+ 
+   
+ 2010/04/14, Zhou Zhiyang, Xiangtan.
+---------------------------------------
+ 1. 在结构体 jx_ParAMGData 中增加了以下两个成员：
+    int      coarse_threshold;   // the minimum number of gridpoints in the coarsest level
+    double   coarse_ratio;       // when coarse_size >= fine_size*coarse_ratio,
+                                 // use CLJP instead of the current coarsening strategy.
+
+ 2010/03/28, Zhou Zhiyang, Xiangtan.
+-------------------------------------
+ 1. 将函数名 jx_PAMGSetjx_CoarsestSolverID 换为 jx_PAMGSetCoarsestSolverID.
+ 

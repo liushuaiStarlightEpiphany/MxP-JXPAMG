@@ -1,0 +1,3288 @@
+#include "jx_parilu.h"
+#include "jx_krylov.h"
+#include "jx_mv.h"
+#include <float.h>
+#define HYPRE_USING_CUDA 1
+#define HYPRE_USING_GPU 1
+
+extern JX_Real Tri_Total_time;
+/*--------------------------------------------------------------------
+ * jx_ILUSolve
+ *
+ * TODO (VPM): Change variable names of F_array and U_array
+ *--------------------------------------------------------------------*/
+
+JX_Int
+jx_ILUSolve(void *ilu_vdata,
+            jx_ParCSRMatrix *A,
+            jx_ParVector *f,
+            jx_ParVector *u)
+{
+   MPI_Comm comm = jx_ParCSRMatrixComm(A);
+   jx_ParILUData *ilu_data = (jx_ParILUData *)ilu_vdata;
+
+   /* Matrices */
+   jx_ParCSRMatrix *matmL = jx_ParILUDataMatLModified(ilu_data);
+   jx_ParCSRMatrix *matmU = jx_ParILUDataMatUModified(ilu_data);
+   jx_ParCSRMatrix *matA = jx_ParILUDataMatA(ilu_data);
+   jx_ParCSRMatrix *matL = jx_ParILUDataMatL(ilu_data);
+   jx_ParCSRMatrix *matU = jx_ParILUDataMatU(ilu_data);
+   jx_ParCSRMatrix *matS = jx_ParILUDataMatS(ilu_data);
+   JX_Real *matD = jx_ParILUDataMatD(ilu_data);
+   JX_Real *matmD = jx_ParILUDataMatDModified(ilu_data);
+
+   /* Vectors */
+   JX_Int ilu_type = jx_ParILUDataIluType(ilu_data);
+   JX_Int *perm = jx_ParILUDataPerm(ilu_data);
+   JX_Int *qperm = jx_ParILUDataQPerm(ilu_data);
+   jx_ParVector *F_array = jx_ParILUDataF(ilu_data);
+   jx_ParVector *U_array = jx_ParILUDataU(ilu_data);
+   jx_ParVector *D_array = jx_ParILUDataD(ilu_data);
+
+   //    /* Device data */
+   // #if defined(JX_USING_GPU)
+   //    jx_CSRMatrix      *matALU_d           = jx_ParILUDataMatAILUDevice(ilu_data);
+   //    jx_CSRMatrix      *matBLU_d           = jx_ParILUDataMatBILUDevice(ilu_data);
+   //    jx_CSRMatrix      *matE_d             = jx_ParILUDataMatEDevice(ilu_data);
+   //    jx_CSRMatrix      *matF_d             = jx_ParILUDataMatFDevice(ilu_data);
+   //    jx_ParCSRMatrix   *Aperm              = jx_ParILUDataAperm(ilu_data);
+   //    jx_Vector         *Adiag_diag         = jx_ParILUDataADiagDiag(ilu_data);
+   //    jx_Vector         *Sdiag_diag         = jx_ParILUDataSDiagDiag(ilu_data);
+   //    jx_ParVector      *Ztemp              = jx_ParILUDataZTemp(ilu_data);
+   //    JX_Int             test_opt           = jx_ParILUDataTestOption(ilu_data);
+   // #endif
+
+   /* Solver settings */
+   JX_Real tol = jx_ParILUDataTol(ilu_data);
+   JX_Int logging = jx_ParILUDataLogging(ilu_data);
+   JX_Int print_level = jx_ParILUDataPrintLevel(ilu_data);
+   JX_Int max_iter = jx_ParILUDataMaxIter(ilu_data);
+   JX_Int tri_solve = jx_ParILUDataTriSolve(ilu_data);
+   JX_Int lower_jacobi_iters = jx_ParILUDataLowerJacobiIters(ilu_data);
+   JX_Int upper_jacobi_iters = jx_ParILUDataUpperJacobiIters(ilu_data);
+   JX_Int IR_iters = jx_ParILUDataIRIters(ilu_data);
+   JX_Real *norms = jx_ParILUDataRelResNorms(ilu_data);
+   jx_ParVector *Ftemp = jx_ParILUDataFTemp(ilu_data);
+   jx_ParVector *Utemp = jx_ParILUDataUTemp(ilu_data);
+   jx_ParVector *Xtemp = jx_ParILUDataXTemp(ilu_data);
+   jx_ParVector *Ytemp = jx_ParILUDataYTemp(ilu_data);
+   JX_Real *fext = jx_ParILUDataFExt(ilu_data);
+   JX_Real *uext = jx_ParILUDataUExt(ilu_data);
+   jx_ParVector *residual = NULL;
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real conv_factor = 0.0;
+   JX_Real resnorm = 1.0;
+   JX_Real init_resnorm = 0.0;
+   JX_Real rel_resnorm;
+   JX_Real rhs_norm = 0.0;
+   JX_Real old_resnorm;
+   JX_Real ieee_check = 0.0;
+   JX_Real operat_cmplxty = jx_ParILUDataOperatorComplexity(ilu_data);
+   JX_Int Solve_err_flag;
+   JX_Int iter, num_procs, my_id;
+   JX_Real starttime = 0.0, endtime = 0.0;
+
+   /* problem size */
+   JX_Int n = jx_ParCSRMatrixNumRows(A);
+   JX_Int nLU = n; // jx_ParILUDataNLU(ilu_data);
+   JX_Int *u_end = jx_ParILUDataUEnd(ilu_data);
+
+   /* Schur system solve */
+   //    JX_Solver          schur_solver       = jx_ParILUDataSchurSolver(ilu_data);
+   //    JX_Solver          schur_precond      = jx_ParILUDataSchurPrecond(ilu_data);
+   jx_ParVector *rhs = jx_ParILUDataRhs(ilu_data);
+   jx_ParVector *x = jx_ParILUDataX(ilu_data);
+
+   if (logging > 1)
+   {
+      residual = jx_ParILUDataResidual(ilu_data);
+   }
+
+   jx_ParILUDataNumIterations(ilu_data) = 0;
+
+   jx_MPI_Comm_size(comm, &num_procs);
+   jx_MPI_Comm_rank(comm, &my_id);
+
+   Solve_err_flag = 0;
+
+   /*-----------------------------------------------------------------------
+    *     write some initial info
+    *-----------------------------------------------------------------------*/
+
+   if (my_id == 0 && print_level > 1 && tol > 0.)
+   {
+      jx_printf("\n\n ILU SOLVER SOLUTION INFO:\n");
+   }
+
+   /*-----------------------------------------------------------------------
+    *    Compute initial residual and print
+    *-----------------------------------------------------------------------*/
+
+   if (print_level > 1 || logging > 1 || tol > 0.)
+   {
+      if (logging > 1)
+      {
+         jx_ParVectorCopy(f, residual);
+         if (tol > 0.0)
+         {
+            jx_ParCSRMatrixMatvec(alpha, A, u, beta, residual);
+         }
+         resnorm = sqrt(jx_ParVectorInnerProd(residual, residual));
+      }
+      else
+      {
+         jx_ParVectorCopy(f, Ftemp);
+         if (tol > 0.0)
+         {
+            jx_ParCSRMatrixMatvec(alpha, A, u, beta, Ftemp);
+         }
+         resnorm = sqrt(jx_ParVectorInnerProd(Ftemp, Ftemp));
+      }
+
+      /* Since it does not diminish performance, attempt to return an error flag
+         and notify users when they supply bad input. */
+      if (resnorm != 0.)
+      {
+         ieee_check = resnorm / resnorm; /* INF -> NaN conversion */
+      }
+      if (ieee_check != ieee_check)
+      {
+         /* ...INFs or NaNs in input can make ieee_check a NaN.  This test
+            for ieee_check self-equality works on all IEEE-compliant compilers/
+            machines, c.f. page 8 of "Lecture Notes on the Status of IEEE 754"
+            by W. Kahan, May 31, 1996.  Currently (July 2002) this paper may be
+            found at http://HTTP.CS.Berkeley.EDU/~wkahan/ieee754status/IEEE754.PDF */
+         if (print_level > 0)
+         {
+            jx_printf("\n\nERROR detected by Hypre ...  BEGIN\n");
+            jx_printf("ERROR -- jx_ILUSolve: INFs and/or NaNs detected in input.\n");
+            jx_printf("User probably placed non-numerics in supplied A, x_0, or b.\n");
+            jx_printf("ERROR detected by Hypre ...  END\n\n\n");
+         }
+         jx_error(JX_ERROR_GENERIC);
+
+         return jx_error_flag;
+      }
+
+      init_resnorm = resnorm;
+      rhs_norm = sqrt(jx_ParVectorInnerProd(f, f));
+      if (rhs_norm > DBL_EPSILON) // JX_REAL_EPSILON
+      {
+         rel_resnorm = init_resnorm / rhs_norm;
+      }
+      else
+      {
+         /* rhs is zero, return a zero solution */
+         jx_ParVectorSetConstantValues(U_array, 0.0);
+         if (logging > 0)
+         {
+            rel_resnorm = 0.0;
+            jx_ParILUDataFinalRelResidualNorm(ilu_data) = rel_resnorm;
+         }
+
+         return jx_error_flag;
+      }
+   }
+   else
+   {
+      rel_resnorm = 1.;
+   }
+
+   if (my_id == 0 && print_level > 1)
+   {
+      jx_printf("                                            relative\n");
+      jx_printf("               residual        factor       residual\n");
+      jx_printf("               --------        ------       --------\n");
+      jx_printf("    Initial    %e                 %e\n", init_resnorm,
+                rel_resnorm);
+   }
+
+   matA = A;
+   U_array = u;
+   F_array = f;
+
+   JX_Int **L_levels, **U_levels;
+   JX_Int *L_level_sizes, *U_level_sizes;
+   JX_Int L_num_levels, U_num_levels;
+   // JX_Int *U_perm, U_iperm;
+   // JX_Int *L_perm, L_iperm;
+
+   // U_perm = jx_ParILUDataU_perm(ilu_data);
+   // U_iperm = jx_ParILUDataU_iperm(ilu_data);
+
+   // L_perm = jx_ParILUDataL_perm(ilu_data);
+   // L_iperm = jx_ParILUDataL_iperm(ilu_data);
+
+   L_levels = jx_ParILUDataL_levels(ilu_data);
+   L_level_sizes = jx_ParILUDataL_level_sizes(ilu_data);
+   L_num_levels = jx_ParILUDataL_num_levels(ilu_data);
+
+   U_levels = jx_ParILUDataU_levels(ilu_data);
+   U_level_sizes = jx_ParILUDataU_level_sizes(ilu_data);
+   U_num_levels = jx_ParILUDataL_num_levels(ilu_data);
+   /************** Main Solver Loop - always do 1 iteration ************/
+   iter = 0;
+   while ((rel_resnorm >= tol || iter < 1) &&
+          (iter < max_iter))
+   {
+      switch (tri_solve)
+      {
+      case 1:
+         // starttime = jx_MPI_Wtime();
+         jx_ILUSolveLU(matA, F_array, U_array, perm, n,
+                       matL, matD, matU, Utemp, Ftemp);
+         // jx_ILUSolveLUIter(matA, F_array, U_array, perm, n,
+         //       matL, matD, matU, Utemp, Ftemp,
+         //       lower_jacobi_iters, upper_jacobi_iters);
+         // endtime = jx_MPI_Wtime();
+         // Tri_Total_time +=  endtime - starttime;
+         break;
+      case 2:
+         starttime = jx_MPI_Wtime();
+         jx_TriangularSolveLevel(matA, F_array, U_array, n,
+                                 matL, matD, matU, Utemp, Ftemp,
+                                 ilu_data->nlevL, ilu_data->jlevL, ilu_data->ilevL,
+                                 ilu_data->nlevU, ilu_data->jlevU, ilu_data->ilevU);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 3: // 多色GS-IR
+         starttime = jx_MPI_Wtime();
+         jx_MultiColorTriangularSolve(matA, F_array, U_array, n,
+                                      matL, matD, matU, Ftemp, Utemp,
+                                      ilu_data->nlevL, ilu_data->jlevL, ilu_data->ilevL,
+                                      ilu_data->nlevU, ilu_data->jlevU, ilu_data->ilevU, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 4: // 直接法-IR
+         starttime = jx_MPI_Wtime();
+         jx_MultiGS_TriangularSolve(matA, F_array, U_array, n,
+                                    matL, matD, matU, Ftemp, Utemp, IR_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 6: // jacobi
+         starttime = jx_MPI_Wtime();
+         jx_ILUSolveLUIter(matA, F_array, U_array, perm, n,
+                           matL, matD, matU, Utemp, Ftemp,
+                           lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 7: // 层次调度 + IR
+         starttime = jx_MPI_Wtime();
+         jx_MultiL_TriangularSolve(matA, F_array, U_array, n,
+                                   matL, matD, matU, Ftemp, Utemp,
+                                   ilu_data->nlevL, ilu_data->jlevL, ilu_data->ilevL,
+                                   ilu_data->nlevU, ilu_data->jlevU, ilu_data->ilevU, IR_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 8: // 8GS + IR
+         starttime = jx_MPI_Wtime();
+         jx_MultiColorTriangularSolve(matA, F_array, U_array, n,
+                                      matL, matD, matU, Ftemp, Utemp,
+                                      ilu_data->nlevL, ilu_data->jlevL, ilu_data->ilevL,
+                                      ilu_data->nlevU, ilu_data->jlevU, ilu_data->ilevU, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 9: // jacobi-IR LU整体做循环
+         starttime = jx_MPI_Wtime();
+         jx_ILUSolveLUIter_v2(matA, F_array, U_array, perm, n,
+                              matL, matD, matU, Utemp, Ftemp,
+                              lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 10: // 函数-jacobi-IR
+         starttime = jx_MPI_Wtime();
+         jx_JacobiTriangularSolve_spmv(matA, F_array, U_array, perm, n, matL, matD,
+                                       matU, Utemp, Ftemp, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 16:
+         starttime = jx_MPI_Wtime();
+         jx_JacobiTriangularSolve_spmv1(matA, F_array, U_array, perm, n, matL, matD, D_array,
+                                        matU, Utemp, Ftemp, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+         // case 10:  //GS-jacobi-IR
+         //    starttime = jx_MPI_Wtime();
+         //    jx_gsJacobiTriangularSolve(matA, F_array, U_array, perm, n,matL, matD,
+         //                       matU, Utemp, Ftemp,IR_iters,lower_jacobi_iters, upper_jacobi_iters);
+         //    endtime = jx_MPI_Wtime();
+         //    Tri_Total_time +=  endtime - starttime;
+         // break;
+
+      case 11: // JGS-IR
+         starttime = jx_MPI_Wtime();
+         jx_JGS_TriangularSolve(matA, F_array, U_array, perm, n, matL, matD,
+                                matU, Utemp, Ftemp, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 12: // 多色GS-IR
+         starttime = jx_MPI_Wtime();
+         jx_MultiColorTriangularSolve1(matA, F_array, U_array, n, matL, matD, matU, Ftemp, Utemp,
+                                       ilu_data->nlevL, ilu_data->jlevL, ilu_data->ilevL, ilu_data->nlevU,
+                                       ilu_data->jlevU, ilu_data->ilevU, IR_iters, lower_jacobi_iters, upper_jacobi_iters,
+                                       ilu_data->L_perm, ilu_data->L_iperm, ilu_data->U_perm, ilu_data->U_iperm);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 13: // 层次调度 + IR
+         starttime = jx_MPI_Wtime();
+         jx_MultiL_TriangularSolve1(matA, F_array, U_array, n,
+                                    matL, matD, matU, Ftemp, Utemp,
+                                    ilu_data->nlevL, ilu_data->jlevL, ilu_data->ilevL,
+                                    ilu_data->nlevU, ilu_data->jlevU, ilu_data->ilevU, IR_iters,
+                                    ilu_data->L_perm, ilu_data->L_iperm, ilu_data->U_perm, ilu_data->U_iperm);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 14: // 完全分布式 + IR
+         starttime = jx_MPI_Wtime();
+         jx_parJacobi_TriangularSolve(matA, F_array, U_array, n, matL, D_array,
+                                      matU, Utemp, Ftemp, Xtemp, Ytemp, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 5: // jacobi-IR
+         starttime = jx_MPI_Wtime();
+         jx_JacobiTriangularSolve(matA, F_array, U_array, perm, n, matL, matD,
+                                  matU, Utemp, Ftemp, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 20: // jacobi-IR
+         starttime = jx_MPI_Wtime();
+         jx_JacobiTriangularSolve22(matA, F_array, U_array, perm, n, matL, matD,
+                                    matU, Utemp, Ftemp, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+
+      case 21: // jacobi-IR
+         starttime = jx_MPI_Wtime();
+         jx_JacobiTriangularSolve33(matA, F_array, U_array, perm, n, matL, matD,
+                                    matU, Utemp, Ftemp, IR_iters, lower_jacobi_iters, upper_jacobi_iters);
+         endtime = jx_MPI_Wtime();
+         Tri_Total_time += endtime - starttime;
+         break;
+      }
+      /*---------------------------------------------------------------
+       *    Compute residual and residual norm
+       *----------------------------------------------------------------*/
+
+      if (print_level > 1 || logging > 1 || tol > 0.)
+      {
+         old_resnorm = resnorm;
+
+         if (logging > 1)
+         {
+            jx_ParVectorCopy(F_array, residual);
+            jx_ParCSRMatrixMatvec(alpha, matA, U_array, beta, residual);
+            resnorm = sqrt(jx_ParVectorInnerProd(residual, residual));
+         }
+         else
+         {
+            jx_ParVectorCopy(F_array, Ftemp);
+            jx_ParCSRMatrixMatvec(alpha, matA, U_array, beta, Ftemp);
+            resnorm = sqrt(jx_ParVectorInnerProd(Ftemp, Ftemp));
+         }
+
+         if (old_resnorm)
+         {
+            conv_factor = resnorm / old_resnorm;
+         }
+         else
+         {
+            conv_factor = resnorm;
+         }
+
+         if (rhs_norm > DBL_EPSILON)
+         {
+            rel_resnorm = resnorm / rhs_norm;
+         }
+         else
+         {
+            rel_resnorm = resnorm;
+         }
+
+         norms[iter] = rel_resnorm;
+      }
+
+      ++iter;
+      jx_ParILUDataNumIterations(ilu_data) = iter;
+      jx_ParILUDataFinalRelResidualNorm(ilu_data) = rel_resnorm;
+
+      if (my_id == 0 && print_level > 1)
+      {
+         jx_printf("    ILUSolve %2d   %e    %f     %e \n", iter,
+                   resnorm, conv_factor, rel_resnorm);
+      }
+   }
+
+   /* check convergence within max_iter */
+   if (iter == max_iter && tol > 0.)
+   {
+      Solve_err_flag = 1;
+      jx_error(JX_ERROR_CONV);
+   }
+
+   /*-----------------------------------------------------------------------
+    *    Print closing statistics
+    *    Add operator and grid complexity stats
+    *-----------------------------------------------------------------------*/
+
+   if (iter > 0 && init_resnorm)
+   {
+      conv_factor = pow((resnorm / init_resnorm), (1.0 / (JX_Real)iter));
+   }
+   else
+   {
+      conv_factor = 1.;
+   }
+
+   if (print_level > 1)
+   {
+      /*** compute operator and grid complexity (fill factor) here ?? ***/
+      if (my_id == 0)
+      {
+         if (Solve_err_flag == 1)
+         {
+            jx_printf("\n\n==============================================");
+            jx_printf("\n NOTE: Convergence tolerance was not achieved\n");
+            jx_printf("      within the allowed %d iterations\n", max_iter);
+            jx_printf("==============================================");
+         }
+         jx_printf("\n\n Average Convergence Factor = %f \n", conv_factor);
+         jx_printf("                operator = %f\n", operat_cmplxty);
+      }
+   }
+
+   return jx_error_flag;
+}
+
+/*--------------------------------------------------------------------
+ * jx_ILUSolveLUIter
+ *
+ * Iterative incomplete LU solve
+ *
+ * L, D and U factors only have local scope (no off-diag terms)
+ *  so apart from the residual calculation (which uses A), the solves
+ *  with the L and U factors are local.
+ *
+ * Note: perm contains the permutation of indexes corresponding to
+ * user-prescribed reordering strategy. In the block Jacobi case, perm
+ * may be NULL if no reordering is done (for performance, (perm == NULL)
+ * assumes identity mapping of indexes). Hence we need to check the local
+ * solves for this case and avoid segfaults. - DOK
+ *--------------------------------------------------------------------*/
+
+// JX_Int
+// jx_ILUSolveLUIter(jx_ParCSRMatrix *A,
+//                      jx_ParVector    *f,
+//                      jx_ParVector    *u,
+//                      JX_Int          *perm,
+//                      JX_Int           nLU,
+//                      jx_ParCSRMatrix *L,
+//                      JX_Real         *D,
+//                      jx_ParCSRMatrix *U,
+//                      jx_ParVector    *ftemp,
+//                      jx_ParVector    *utemp,
+//                      JX_Int           lower_jacobi_iters,
+//                      JX_Int           upper_jacobi_iters)
+// {
+//    /* Data objects for L and U */
+//    jx_CSRMatrix *L_diag      = jx_ParCSRMatrixDiag(L);
+//    JX_Real      *L_diag_data = jx_CSRMatrixData(L_diag);
+//    JX_Int       *L_diag_i    = jx_CSRMatrixI(L_diag);
+//    JX_Int       *L_diag_j    = jx_CSRMatrixJ(L_diag);
+//    jx_CSRMatrix *U_diag      = jx_ParCSRMatrixDiag(U);
+//    JX_Real      *U_diag_data = jx_CSRMatrixData(U_diag);
+//    JX_Int       *U_diag_i    = jx_CSRMatrixI(U_diag);
+//    JX_Int       *U_diag_j    = jx_CSRMatrixJ(U_diag);
+
+//    /* Vectors */
+//    jx_Vector    *utemp_local = jx_ParVectorLocalVector(utemp);
+//    JX_Real      *utemp_data  = jx_VectorData(utemp_local);
+//    jx_Vector    *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//    JX_Real      *ftemp_data  = jx_VectorData(ftemp_local);
+
+//    /* Local variables */
+//    JX_Real       alpha       = -1.0;
+//    JX_Real       beta        = 1.0;
+//    JX_Real       sum;
+//    JX_Int        i, j, k1, k2, kk;
+
+//    /* Initialize Utemp to zero.
+//     * This is necessary for correctness, when we use optimized
+//     * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+//     */
+//    //jx_ParVectorSetConstantValues( utemp, 0.);
+//    /* compute residual */
+//    jx_ParVectorCopy(f, ftemp);
+//    jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//    /* L solve - Forward solve */
+//    /* copy rhs to account for diagonal of L (which is identity) */
+
+//    /* Initialize iteration to 0 */
+//    if (perm)
+//    {
+//       for ( i = 0; i < nLU; i++ )
+//       {
+//          utemp_data[perm[i]] = 0.0;
+//       }
+//    }
+//    else
+//    {
+//       for ( i = 0; i < nLU; i++ )
+//       {
+//          utemp_data[i] = 0.0;
+//       }
+//    }
+//    /* Jacobi iteration loop */
+//    for ( kk = 0; kk < lower_jacobi_iters; kk++ )
+//    {
+//       /* u^{k+1} = f - Lu^k */
+
+//       /* Do a SpMV with L and save the results in xtemp */
+//       if (perm)
+//       {
+//          for ( i = nLU - 1; i >= 0; i-- )
+//          {
+//             sum = 0.0;
+//             k1 = L_diag_i[i] ; k2 = L_diag_i[i + 1];
+//             for (j = k1; j < k2; j++)
+//             {
+//                sum += L_diag_data[j] * utemp_data[perm[L_diag_j[j]]];
+//             }
+//             utemp_data[perm[i]] = ftemp_data[perm[i]] - sum;
+//          }
+//       }
+//       else
+//       {
+//          for ( i = nLU - 1; i >= 0; i-- )
+//          {
+//             sum = 0.0;
+//             k1 = L_diag_i[i] ; k2 = L_diag_i[i + 1];
+//             for (j = k1; j < k2; j++)
+//             {
+//                sum += L_diag_data[j] * utemp_data[L_diag_j[j]];
+//             }
+//             utemp_data[i] = ftemp_data[i] - sum;
+//          }
+//       }
+//    } /* end jacobi loop */
+
+//    /* Initialize iteration to 0 */
+//    if (perm)
+//    {
+//       for ( i = 0; i < nLU; i++ )
+//       {
+//          ftemp_data[perm[i]] = 0.0;
+//       }
+//    }
+//    else
+//    {
+//       for ( i = 0; i < nLU; i++ )
+//       {
+//          ftemp_data[i] = 0.0;
+//       }
+//    }
+
+//    /* Jacobi iteration loop */
+//    for ( kk = 0; kk < upper_jacobi_iters; kk++ )
+//    {
+//       /* u^{k+1} = f - Uu^k */
+
+//       /* Do a SpMV with U and save the results in xtemp */
+//       if (perm)
+//       {
+//          for ( i = 0; i < nLU; ++i )
+//          {
+//             sum = 0.0;
+//             k1 = U_diag_i[i] ; k2 = U_diag_i[i + 1];
+//             for (j = k1; j < k2; j++)
+//             {
+//                sum += U_diag_data[j] * ftemp_data[perm[U_diag_j[j]]];
+//             }
+//             ftemp_data[perm[i]] = D[i] * (utemp_data[perm[i]] - sum);
+//          }
+//       }
+//       else
+//       {
+//          for ( i = 0; i < nLU; ++i )
+//          {
+//             sum = 0.0;
+//             k1 = U_diag_i[i] ; k2 = U_diag_i[i + 1];
+//             for (j = k1; j < k2; j++)
+//             {
+//                sum += U_diag_data[j] * ftemp_data[U_diag_j[j]];
+//             }
+//             ftemp_data[i] = D[i] * (utemp_data[i] - sum);
+//          }
+//       }
+//    } /* end jacobi loop */
+
+//    /* Update solution */
+//    jx_ParVectorAxpy(beta, ftemp, u);
+
+//    return jx_error_flag;
+// }
+
+JX_Int
+jx_ILUSolveLUIter(jx_ParCSRMatrix *A,
+                  jx_ParVector *f,
+                  jx_ParVector *u,
+                  JX_Int *perm,
+                  JX_Int nLU,
+                  jx_ParCSRMatrix *L,
+                  JX_Real *D,
+                  jx_ParCSRMatrix *U,
+                  jx_ParVector *ftemp,
+                  jx_ParVector *utemp,
+                  JX_Int lower_jacobi_iters,
+                  JX_Int upper_jacobi_iters)
+{
+   /* Data objects for L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk;
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* Initialize iteration to 0 */
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *y_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+#pragma omp parallel for
+   for (i = 0; i < nLU; i++)
+   {
+      utemp_data[i] = 0.0;
+   }
+   /* Jacobi iteration loop */
+   for (kk = 0; kk < lower_jacobi_iters; kk++)
+   {
+#pragma omp parallel for private(j, k1, k2, sum)
+      for (i = nLU - 1; i >= 0; i--)
+      {
+         sum = 0.0;
+         k1 = L_diag_i[i];
+         k2 = L_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            sum += L_diag_data[j] * utemp_data[L_diag_j[j]];
+         }
+         y_new[i] = ftemp_data[i] - sum;
+      }
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+         utemp_data[i] = y_new[i];
+   } /* end jacobi loop */
+
+#pragma omp parallel for
+   for (i = 0; i < nLU; i++)
+   {
+      utemp_data[i] = 0.0;
+   }
+
+   /* Jacobi iteration loop */
+   for (kk = 0; kk < upper_jacobi_iters; kk++)
+   {
+#pragma omp parallel for private(j, k1, k2, sum)
+      /* u^{k+1} = f - Uu^k */
+      for (i = 0; i < nLU; ++i)
+      {
+         sum = 0.0;
+         k1 = U_diag_i[i];
+         k2 = U_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            sum += U_diag_data[j] * utemp_data[U_diag_j[j]];
+         }
+         u_new[i] = D[i] * (y_new[i] - sum);
+      }
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+         utemp_data[i] = u_new[i];
+   } /* end jacobi loop */
+
+   /* Update solution */
+   jx_ParVectorAxpy(beta, utemp, u);
+
+   free(u_new);
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_ILUSolveLUIter_v2(jx_ParCSRMatrix *A,
+                     jx_ParVector *f,
+                     jx_ParVector *u,
+                     JX_Int *perm,
+                     JX_Int nLU,
+                     jx_ParCSRMatrix *L,
+                     JX_Real *D,
+                     jx_ParCSRMatrix *U,
+                     jx_ParVector *ftemp,
+                     jx_ParVector *utemp,
+                     JX_Int lower_jacobi_iters,
+                     JX_Int upper_jacobi_iters)
+{
+   /* Data objects for L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk;
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* Initialize iteration to 0 */
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *ytemp = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *y_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+#pragma omp parallel for
+   for (i = 0; i < nLU; i++)
+   {
+      utemp_data[i] = 0.0;
+      ytemp[i] = 0.0;
+   }
+   /* Jacobi iteration loop */
+   for (kk = 0; kk < lower_jacobi_iters; kk++)
+   {
+#pragma omp parallel for private(j, k1, k2, sum)
+      for (i = nLU - 1; i >= 0; i--)
+      {
+         sum = 0.0;
+         k1 = L_diag_i[i];
+         k2 = L_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            sum += L_diag_data[j] * ytemp[L_diag_j[j]];
+         }
+         y_new[i] = ftemp_data[i] - sum;
+      }
+
+#pragma omp parallel for private(j, k1, k2, sum)
+      /* u^{k+1} = f - Uu^k */
+      for (i = 0; i < nLU; ++i)
+      {
+         sum = 0.0;
+         k1 = U_diag_i[i];
+         k2 = U_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            sum += U_diag_data[j] * utemp_data[U_diag_j[j]];
+         }
+         u_new[i] = D[i] * (y_new[i] - sum);
+      }
+
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = u_new[i];
+         ytemp[i] = y_new[i];
+      }
+   } /* end jacobi loop */
+
+   /* Update solution */
+   jx_ParVectorAxpy(beta, utemp, u);
+
+   free(u_new);
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_ILUSolveLU(jx_ParCSRMatrix *A,
+              jx_ParVector *f,
+              jx_ParVector *u,
+              JX_Int *perm,
+              JX_Int nLU,
+              jx_ParCSRMatrix *L,
+              JX_Real *D,
+              jx_ParCSRMatrix *U,
+              jx_ParVector *ftemp,
+              jx_ParVector *utemp)
+{
+   /* data objects for L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Int i, j, k1, k2;
+
+   // char FileNameCoaMat[256];
+   // printf("%d",nLU);
+   // jx_sprintf(FileNameCoaMat, "L_CSR_%d", 2);
+   // jx_ParCSRMatrixPrint(L, FileNameCoaMat);
+   // jx_sprintf(FileNameCoaMat, "U_CSR_%d", 2);
+   // jx_ParCSRMatrixPrint(U, FileNameCoaMat);
+
+   // FILE *fp;
+   // jx_sprintf(FileNameCoaMat, "D_%d", 2);
+   // fp = fopen(FileNameCoaMat, "w");
+   // for(j = 0; j < nLU; j++){
+   // jx_fprintf(fp, "%.14e\n", D[j]);
+   // }
+   // fclose(fp);
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   // jx_sprintf(FileNameCoaMat, "F_temp_%d", 2);
+   // fp = fopen(FileNameCoaMat, "w");
+   // for(j = 0; j < nLU; j++){
+   // jx_fprintf(fp, "%.14e\n", ftemp_data[j]);
+   // }
+   // fclose(fp);
+
+   /* L solve - Forward solve */
+   /* copy rhs to account for diagonal of L (which is identity) */
+   if (perm)
+   {
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[perm[i]] = ftemp_data[perm[i]];
+      }
+   }
+   else
+   {
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = ftemp_data[i];
+      }
+   }
+
+   /* Update with remaining (off-diagonal) entries of L */
+   if (perm)
+   {
+      for (i = 0; i < nLU; i++)
+      {
+         k1 = L_diag_i[i];
+         k2 = L_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            utemp_data[perm[i]] -= L_diag_data[j] * utemp_data[perm[L_diag_j[j]]];
+         }
+      }
+   }
+   else
+   {
+      for (i = 0; i < nLU; i++)
+      {
+         k1 = L_diag_i[i];
+         k2 = L_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            utemp_data[i] -= L_diag_data[j] * utemp_data[L_diag_j[j]];
+         }
+      }
+   }
+   /*-------------------- U solve - Backward substitution */
+   if (perm)
+   {
+      for (i = nLU - 1; i >= 0; i--)
+      {
+         /* first update with the remaining (off-diagonal) entries of U */
+         k1 = U_diag_i[i];
+         k2 = U_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            utemp_data[perm[i]] -= U_diag_data[j] * utemp_data[perm[U_diag_j[j]]];
+         }
+
+         /* diagonal scaling (contribution from D. Note: D is stored as its inverse) */
+         utemp_data[perm[i]] *= D[i];
+      }
+   }
+   else
+   {
+      for (i = nLU - 1; i >= 0; i--)
+      {
+         /* first update with the remaining (off-diagonal) entries of U */
+         k1 = U_diag_i[i];
+         k2 = U_diag_i[i + 1];
+         for (j = k1; j < k2; j++)
+         {
+            utemp_data[i] -= U_diag_data[j] * utemp_data[U_diag_j[j]];
+         }
+
+         /* diagonal scaling (contribution from D. Note: D is stored as its inverse) */
+         utemp_data[i] *= D[i];
+      }
+   }
+   /* Update solution */
+   jx_ParVectorAxpy(beta, utemp, u);
+
+   // char FileNameCoaMat[256];
+   //  FILE  *fp;
+   //  jx_sprintf(FileNameCoaMat, "rhs_%d", 1);
+   //  fp = fopen(FileNameCoaMat, "w");
+   //  for(j = 0; j < nLU; j++){
+   //  jx_fprintf(fp, "%.14e\n", utemp_data[j]);
+   //  }
+   //  fclose(fp);
+
+   return jx_error_flag;
+}
+
+JX_Int jx_TriangularSolveLevel_v1(jx_ParCSRMatrix *A,
+                                  jx_ParVector *f,
+                                  jx_ParVector *u,
+                                  JX_Int nLU,
+                                  jx_ParCSRMatrix *L,
+                                  JX_Real *D,
+                                  jx_ParCSRMatrix *U,
+                                  jx_ParVector *ftemp,
+                                  jx_ParVector *utemp,
+                                  JX_Int **L_levels,     // L 的层次调度
+                                  JX_Int *L_level_sizes, // L 的层次大小
+                                  JX_Int L_num_levels,   // L 的层次数
+                                  JX_Int **U_levels,     // U 的层次调度
+                                  JX_Int *U_level_sizes, // U 的层次大小
+                                  JX_Int U_num_levels)   // U 的层次数
+{
+   /* Extract diagonal blocks of L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Get vector data */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* Residual: ftemp = f - A * u */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* L solve - Forward substitution (L assumed unit diagonal) */
+   // #pragma omp parallel for schedule(static)
+   for (JX_Int i = 0; i < nLU; i++)
+   {
+      utemp_data[i] = ftemp_data[i];
+   }
+
+   for (JX_Int l = 0; l < L_num_levels; l++)
+   {
+      // #pragma omp parallel for schedule(static)
+      for (JX_Int k = 0; k < L_level_sizes[l]; k++)
+      {
+         JX_Int row = L_levels[l][k];
+         JX_Real sum = utemp_data[row];
+
+         for (JX_Int jj = L_diag_i[row]; jj < L_diag_i[row + 1]; jj++)
+         {
+            JX_Int col = L_diag_j[jj];
+            sum -= L_diag_data[jj] * utemp_data[col];
+         }
+
+         utemp_data[row] = sum;
+      }
+   }
+
+   /* U solve - Backward substitution */
+   for (JX_Int l = U_num_levels - 1; l >= 0; l--)
+   {
+      // #pragma omp parallel for schedule(static)
+      for (JX_Int k = 0; k < U_level_sizes[l]; k++)
+      {
+         JX_Int row = U_levels[l][k];
+         JX_Real sum = utemp_data[row];
+
+         for (JX_Int jj = U_diag_i[row]; jj < U_diag_i[row + 1]; jj++)
+         {
+            JX_Int col = U_diag_j[jj];
+            sum -= U_diag_data[jj] * utemp_data[col];
+         }
+
+         // Diagonal inverse scaling: u[row] = sum / U(row,row)
+         utemp_data[row] = sum * D[row];
+      }
+   }
+
+   /* Final update: u = u + utemp */
+   jx_ParVectorAxpy(beta, utemp, u);
+
+   return jx_error_flag;
+}
+
+JX_Int jx_TriangularSolveLevel(jx_ParCSRMatrix *A,
+                               jx_ParVector *f,
+                               jx_ParVector *u,
+                               JX_Int nLU,
+                               jx_ParCSRMatrix *L,
+                               JX_Real *D,
+                               jx_ParCSRMatrix *U,
+                               jx_ParVector *ftemp,
+                               jx_ParVector *utemp,
+                               JX_Int nlevL,
+                               JX_Int *jlevL,
+                               JX_Int *ilevL,
+                               JX_Int nlevU,
+                               JX_Int *jlevU,
+                               JX_Int *ilevU)
+{
+   /* 提取 L 和 U 的对角块 */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* 获取向量数据 */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* 计算残差：ftemp = f - A * u */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   JX_Real sum;
+   JX_Int begin_row, end_row, i, ii, k, jj, j;
+
+   // char FileNameCoaMat[256];
+   // jx_sprintf(FileNameCoaMat, "L_CSR_%d", 2);
+   // jx_ParCSRMatrixPrint(L, FileNameCoaMat);
+   // jx_sprintf(FileNameCoaMat, "U_CSR_%d", 2);
+   // jx_ParCSRMatrixPrint(U, FileNameCoaMat);
+
+   // FILE *fp;
+   // jx_sprintf(FileNameCoaMat, "D_%d", 2);
+   // fp = fopen(FileNameCoaMat, "w");
+   // for(j = 0; j < nLU; j++){
+   // jx_fprintf(fp, "%.14e\n", D[j]);
+   // }
+   // fclose(fp);
+
+   // printf("Lower Triangular Matrix L:\n");
+   //  printf("Number of levels (nlevL): %d\n", nlevL);
+   //  printf("jlevL (row indices per level): ");
+   //  for (i = 0; i < nLU; i++) printf("%d ", jlevL[i]);
+   //  printf("\n");
+   //  printf("ilevL (level offsets): ");
+   //  for (i = 0; i < nlevL; i++) printf("%d ", ilevL[i]);
+   //  printf("\n\n");
+
+   /* 初始化 utemp = ftemp */
+   for (i = 0; i < nLU; i++)
+   {
+      utemp_data[i] = ftemp_data[i];
+   }
+
+   /* 前向替换：解单位下三角矩阵方程 L * utemp = ftemp */
+   for (k = 0; k < nlevL - 1; k++)
+   {
+#pragma omp parallel for private(i, ii, begin_row, end_row, j, jj, sum)
+      for (ii = ilevL[k]; ii < ilevL[k + 1]; ii++)
+      {
+         i = jlevL[ii];
+         sum = utemp_data[i];
+         begin_row = L_diag_i[i];
+         end_row = L_diag_i[i + 1];
+
+         for (j = begin_row; j < end_row; j++)
+         {
+            jj = L_diag_j[j];
+            sum -= L_diag_data[j] * utemp_data[jj];
+         }
+         utemp_data[i] = sum;
+      }
+      //  #pragma omp barrier
+   }
+
+   /* 后向替换：解上三角矩阵方程 U * u_temp = D⁻¹ * ftemp */
+   for (k = nlevU - 1; k >= 0; k--)
+   {
+#pragma omp parallel for private(i, ii, begin_row, end_row, j, jj, sum)
+      for (ii = ilevU[k]; ii < ilevU[k + 1]; ii++)
+      {
+         i = jlevU[ii];
+         sum = ftemp_data[i];
+         begin_row = U_diag_i[i];
+         end_row = U_diag_i[i + 1];
+
+         for (j = begin_row; j < end_row; j++)
+         {
+            jj = U_diag_j[j];
+            if (jj > i)
+            { /* 严格上三角 */
+               sum -= U_diag_data[j] * utemp_data[jj];
+            }
+         }
+         utemp_data[i] = sum * D[i]; /* 应用对角逆缩放 */
+      }
+   }
+
+   /* 最终更新：u = u + utemp */
+   jx_ParVectorAxpy(beta, utemp, u);
+
+   return jx_error_flag;
+}
+
+JX_Int jx_MultiL_TriangularSolve(jx_ParCSRMatrix *A,
+                                 jx_ParVector *f,
+                                 jx_ParVector *u,
+                                 JX_Int nLU,
+                                 jx_ParCSRMatrix *L,
+                                 JX_Real *D,
+                                 jx_ParCSRMatrix *U,
+                                 jx_ParVector *ftemp,
+                                 jx_ParVector *utemp,
+                                 JX_Int nlevL,
+                                 JX_Int *jlevL,
+                                 JX_Int *ilevL,
+                                 JX_Int nlevU,
+                                 JX_Int *jlevU,
+                                 JX_Int *ilevU,
+                                 JX_Int maxIter)
+{
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   JX_Int i, jj, j, iter, c, k, ii;
+   JX_Int begin_row, end_row;
+   JX_Real sum;
+
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+
+   // 初始残差 ftemp = f - A * u
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   for (iter = 0; iter < maxIter; iter++)
+   {
+// 清空 utemp/ytemp
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0.0;
+         ytemp_data[i] = 0.0;
+      }
+
+      // === 前向替代：解 L * y = ftemp ===
+      for (k = 0; k < nlevL; k++)
+      {
+#pragma omp parallel for private(ii, i, j, jj, sum, begin_row, end_row)
+         for (ii = ilevL[k]; ii < ilevL[k + 1]; ii++)
+         {
+            i = jlevL[ii];
+            sum = ftemp_data[i];
+            begin_row = L_diag_i[i];
+            end_row = L_diag_i[i + 1];
+
+            for (j = begin_row; j < end_row; j++)
+            {
+               jj = L_diag_j[j];
+               if (jj < i)
+               {
+                  sum -= L_diag_data[j] * ytemp_data[jj];
+               }
+            }
+            ytemp_data[i] = sum; // L 为单位对角矩阵
+         }
+      }
+
+      // === 后向替代：解 U * utemp = D⁻¹ * ytemp ===
+      for (k = 0; k < nlevU; k++)
+      {
+#pragma omp parallel for private(ii, i, j, jj, sum, begin_row, end_row)
+         for (ii = ilevU[k]; ii < ilevU[k + 1]; ii++)
+         {
+            i = jlevU[ii];
+            sum = ytemp_data[i];
+            begin_row = U_diag_i[i];
+            end_row = U_diag_i[i + 1];
+
+            for (j = begin_row; j < end_row; j++)
+            {
+               jj = U_diag_j[j];
+               if (jj > i)
+               {
+                  sum -= U_diag_data[j] * utemp_data[jj];
+               }
+            }
+            utemp_data[i] = sum * D[i]; // U 对角不为 1，需要乘 D[i]
+         }
+      }
+
+      // 更新残差 ftemp = ftemp - A * utemp
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(ytemp_data);
+   return jx_error_flag;
+}
+
+// JX_Int jx_MultiL_TriangularSolve1(jx_ParCSRMatrix *A, jx_ParVector *f,
+//                                     jx_ParVector *u, JX_Int nLU,
+//                                     jx_ParCSRMatrix *L, JX_Real *D,
+//                                     jx_ParCSRMatrix *U, jx_ParVector *ftemp,
+//                                     jx_ParVector *utemp, JX_Int nlevL,
+//                                     JX_Int *jlevL, JX_Int *ilevL,
+//                                     JX_Int nlevU, JX_Int *jlevU,
+//                                     JX_Int *ilevU,JX_Int maxIter,
+//                                     JX_Int *L_perm, JX_Int *L_iperm,
+//                                     JX_Int *U_perm, JX_Int *U_iperm)
+// {
+//     jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+//     JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+//     JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+//     JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+//     jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+//     JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+//     JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+//     JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+//     jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//     JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+//     jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+//     JX_Real *utemp_data = jx_VectorData(utemp_local);
+//     JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+//     JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+//     JX_Int i, jj, j, iter, c, k, ii;
+//     JX_Int begin_row, end_row;
+//     JX_Real sum;
+
+//     JX_Real alpha = -1.0;
+//     JX_Real beta = 1.0;
+
+//     // 初始残差 ftemp = f - A * u
+//     jx_ParVectorCopy(f, ftemp);
+//     jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//    for (iter = 0; iter < maxIter; iter++)
+//     {
+//       #pragma omp parallel for
+//       for (i = 0; i < nLU; i++)
+//       {
+//          ytemp_data[i] = ftemp_data[i];
+//          u_new[i] = 0;
+//       }
+
+//         // ====== 前向替代：解 L * y = ftemp，Jacobi迭代 ======
+//          for (int lev = 0; lev < nlevL; lev++)
+//             {
+//                #pragma omp parallel for private( i, j, jj, sum, begin_row, end_row)
+//                for (i = ilevL[lev]; i < ilevL[lev + 1]; i++)
+//                 {
+//                     sum = 0.0;
+//                     begin_row = L_diag_i[i];
+//                     end_row = L_diag_i[i + 1];
+
+//                     for (j = begin_row; j < end_row; j++)
+//                     {
+//                         jj = L_diag_j[j];
+//                         sum += L_diag_data[j] * u_new[jj];
+//                     }
+//                     u_new[L_iperm[i]] = ytemp_data[L_iperm[i]] - sum;
+//                 }
+//             }
+
+//          #pragma omp parallel for
+//             for (i = 0; i < nLU; i++)
+//             {
+//                ytemp_data[i] = u_new[i];
+//                u_new[i] = 0;
+//             }
+
+//         // ====== 后向替代：解 U * utemp = D⁻¹ * ytemp ======
+//             for (int lev = 0; lev < nlevU; lev++)
+//             {
+//                 #pragma omp parallel for private(ii,j, jj, sum, begin_row, end_row)
+//                for (ii = ilevU[lev] ; ii < ilevU[lev + 1]; ii++)
+//                 {
+//                     i = ii;
+//                     sum = 0.0;
+//                     begin_row = U_diag_i[i];
+//                     end_row = U_diag_i[i + 1];
+
+//                     for (j = begin_row; j < end_row; j++)
+//                     {
+//                         jj = U_diag_j[j];
+//                         sum += U_diag_data[j] * u_new[jj];
+//                     }
+//                     u_new[U_iperm[i]] = D[U_iperm[i]] * (ytemp_data[U_iperm[i]] - sum);
+//                 }
+//         }
+
+//          #pragma omp parallel for
+//          for (i = 0; i < nLU; i++)
+//          {
+//             utemp_data[i] = u_new[i];
+//          }
+
+//         // 累加 u ← u + utemp，更新残差
+//         jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+//         jx_ParVectorAxpy(beta, utemp, u);
+//     }
+
+//     free(ytemp_data);
+//     free(u_new);
+
+//     return jx_error_flag;
+// }
+
+JX_Int jx_MultiL_TriangularSolve1(jx_ParCSRMatrix *A, jx_ParVector *f,
+                                  jx_ParVector *u, JX_Int nLU,
+                                  jx_ParCSRMatrix *L, JX_Real *D,
+                                  jx_ParCSRMatrix *U, jx_ParVector *ftemp,
+                                  jx_ParVector *utemp, JX_Int nlevL,
+                                  JX_Int *jlevL, JX_Int *ilevL,
+                                  JX_Int nlevU, JX_Int *jlevU,
+                                  JX_Int *ilevU, JX_Int maxIter,
+                                  JX_Int *L_perm, JX_Int *L_iperm,
+                                  JX_Int *U_perm, JX_Int *U_iperm)
+{
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   //  JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   JX_Int i, jj, j, iter, c, k, ii;
+   JX_Int begin_row, end_row;
+   JX_Real sum;
+
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+
+   // 初始残差 ftemp = f - A * u
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   for (iter = 0; iter < maxIter; iter++)
+   {
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         // ytemp_data[i] = ftemp_data[i];
+         ytemp_data[i] = 0;
+         utemp_data[i] = 0;
+      }
+
+      // ====== 前向替代：解 L * y = ftemp，Jacobi迭代 ======
+      for (int lev = 0; lev < nlevL; lev++)
+      {
+#pragma omp parallel for private(i, j, jj, sum, begin_row, end_row)
+         for (i = ilevL[lev]; i < ilevL[lev + 1]; i++)
+         {
+            sum = 0.0;
+            begin_row = L_diag_i[i];
+            end_row = L_diag_i[i + 1];
+
+            for (j = begin_row; j < end_row; j++)
+            {
+               jj = L_diag_j[j];
+               sum += L_diag_data[j] * ytemp_data[jj];
+            }
+            ytemp_data[L_iperm[i]] = ftemp_data[L_iperm[i]] - sum;
+         }
+      }
+
+      // ====== 后向替代：解 U * utemp = D⁻¹ * ytemp ======
+      for (int lev = 0; lev < nlevU; lev++)
+      {
+#pragma omp parallel for private(ii, j, jj, sum, begin_row, end_row)
+         for (ii = ilevU[lev]; ii < ilevU[lev + 1]; ii++)
+         {
+            i = ii;
+            sum = 0.0;
+            begin_row = U_diag_i[i];
+            end_row = U_diag_i[i + 1];
+
+            for (j = begin_row; j < end_row; j++)
+            {
+               jj = U_diag_j[j];
+               sum += U_diag_data[j] * utemp_data[jj];
+            }
+            utemp_data[U_iperm[i]] = D[U_iperm[i]] * (ytemp_data[U_iperm[i]] - sum);
+         }
+      }
+
+      // #pragma omp parallel for
+      // for (i = 0; i < nLU; i++)
+      // {
+      //    utemp_data[i] = u_new[i];
+      // }
+
+      // 累加 u ← u + utemp，更新残差
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(ytemp_data);
+   //  free(u_new);
+
+   return jx_error_flag;
+}
+
+// 多色GS逼近L，多色GS逼近U
+//  JX_Int jx_MultiColor_baseTriangularSolve(jx_ParCSRMatrix *A,
+//                                      jx_ParVector *f,
+//                                      jx_ParVector *u,
+//                                      JX_Int nLU,
+//                                      jx_ParCSRMatrix *L,
+//                                      JX_Real *D,
+//                                      jx_ParCSRMatrix *U,
+//                                      jx_ParVector *ftemp,
+//                                      jx_ParVector *utemp,
+//                                      JX_Int nlevL,
+//                                      JX_Int *jlevL,
+//                                      JX_Int *ilevL,
+//                                      JX_Int nlevU,
+//                                      JX_Int *jlevU,
+//                                      JX_Int *ilevU,
+//                                      JX_Int maxIter)
+//  {
+//      /* 提取 L 和 U 的对角块 */
+//      jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+//      JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+//      JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+//      JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+//     jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+//     JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+//     JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+//     JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+//     /* 获取向量数据 */
+//     jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//     JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+//     jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+//     JX_Real *utemp_data = jx_VectorData(utemp_local);
+//     JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+//     JX_Int i, jj, j, iter, c, k, ii;
+//     JX_Int begin_row, end_row;
+//     JX_Real sum;
+
+//     /* 计算初始残差：ftemp = f - A * u */
+//     JX_Real alpha = -1.0;
+//     JX_Real beta = 1.0;
+//     jx_ParVectorCopy(f, ftemp);
+//     jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//     /* 初始化 utemp 和 ytemp 为零 */
+//     #pragma omp parallel for
+//     for (i = 0; i < nLU; i++)
+//     {
+//         utemp_data[i] = 0.0;
+//         ytemp_data[i] = 0.0;
+//     }
+//     /* 主迭代循环 */
+//     for (iter = 0; iter < maxIter; iter++)
+//     {
+//          for ( k = 0; k < nlevL; k++) {
+//             #pragma omp parallel for private(ii, j, jj, sum, begin_row, end_row) shared(ytemp_data, ftemp_data, L_diag_i, L_diag_j, L_diag_data)
+//             for ( ii = ilevL[k]; ii < ilevL[k+1]; ii++) {
+//                i = jlevL[ii];
+//                sum = ftemp_data[i];
+//                begin_row = L_diag_i[i];
+//                end_row = L_diag_i[i+1];
+
+//                for (j = begin_row; j < end_row; j++)
+//                {
+//                   jj = L_diag_j[j];
+//                   sum -= L_diag_data[j] * ytemp_data[jj];
+//                }
+//                ytemp_data[i] = sum;
+//             }
+//             #pragma omp barrier
+//          }
+//    }
+
+//    for (iter = 0; iter < maxIter; iter++)
+//    {
+//       for (k =0; k < nlevU; k++) {
+//          #pragma omp parallel for private(ii, j, jj, sum, begin_row, end_row) shared(utemp_data, ytemp_data, U_diag_i, U_diag_j, U_diag_data, D)
+//          for (ii = ilevU[k]; ii < ilevU[k+1]; ii++) {
+//             i = jlevU[ii];
+//             sum = ytemp_data[i];
+//             begin_row = U_diag_i[i];
+//             end_row = U_diag_i[i+1];
+
+//             for (j = begin_row; j < end_row; j++)
+//             {
+//                jj = U_diag_j[j]; /* 修正：使用 j 而非 jj 作为索引 */
+//                sum -= U_diag_data[j] * utemp_data[jj];
+//             }
+//             utemp_data[i] = sum * D[i]; /* 应用对角逆缩放 */
+//          }
+//          #pragma omp barrier
+//       }
+//    }
+
+//    jx_ParVectorAxpy(beta, utemp, u);
+//     /* 清理内存 */
+//     free(ytemp_data);
+//     return jx_error_flag;
+// }
+
+// 多次GS
+JX_Int jx_MultiGS_TriangularSolve(jx_ParCSRMatrix *A,
+                                  jx_ParVector *f,
+                                  jx_ParVector *u,
+                                  JX_Int nLU,
+                                  jx_ParCSRMatrix *L,
+                                  JX_Real *D,
+                                  jx_ParCSRMatrix *U,
+                                  jx_ParVector *ftemp,
+                                  jx_ParVector *utemp,
+                                  JX_Int maxIter)
+{
+   /* 提取 L 和 U 的对角块 */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* 获取向量数据 */
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   JX_Real sum;
+   JX_Int begin_row, end_row, i, jj, j, iter, k;
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* 迭代 maxIter 次 */
+   for (iter = 0; iter < maxIter; iter++)
+   {
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0.0;
+         ytemp_data[i] = 0.0;
+      }
+      // === 前向替代：解 L * y = ftemp ===
+      for (k = 0; k < 1; k++)
+      {
+         for (i = k; i < nLU; i += 1)
+         {
+            sum = ftemp_data[i];
+            begin_row = L_diag_i[i];
+            end_row = L_diag_i[i + 1];
+            for (j = begin_row; j < end_row; j++)
+            {
+               jj = L_diag_j[j];
+               if (jj < i)
+               {
+                  sum -= L_diag_data[j] * ytemp_data[jj];
+               }
+            }
+            ytemp_data[i] = sum; // L 为单位下三角
+         }
+      }
+
+      /* 后向替换：解上三角矩阵方程 U * u = D⁻¹ * ftemp */
+      for (k = 0; k < 1; k++)
+      {
+         for (i = nLU - 1 - k; i >= 0; i -= 1)
+         {
+            sum = ytemp_data[i];
+            begin_row = U_diag_i[i];
+            end_row = U_diag_i[i + 1];
+            for (j = begin_row; j < end_row; j++)
+            {
+               jj = U_diag_j[j];
+               if (jj > i)
+               {
+                  sum -= U_diag_data[j] * utemp_data[jj];
+               }
+            }
+            utemp_data[i] = sum * D[i];
+         }
+      }
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(ytemp_data);
+   return jx_error_flag;
+}
+
+JX_Int jx_MultiColorTriangularSolve(jx_ParCSRMatrix *A, jx_ParVector *f,
+                                    jx_ParVector *u, JX_Int nLU, jx_ParCSRMatrix *L,
+                                    JX_Real *D, jx_ParCSRMatrix *U, jx_ParVector *ftemp,
+                                    jx_ParVector *utemp, JX_Int nlevL, JX_Int *jlevL,
+                                    JX_Int *ilevL, JX_Int nlevU, JX_Int *jlevU,
+                                    JX_Int *ilevU, JX_Int maxIter, JX_Int lower_jacobi_iters,
+                                    JX_Int upper_jacobi_iters)
+{
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   JX_Int i, j, ii, jj, k, kk;
+   JX_Int begin_row, end_row;
+   JX_Real sum;
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   //  JX_Int lower_jacobi_iters = 3;
+   //  JX_Int upper_jacobi_iters = 3;
+
+   // 初始残差 ftemp = f - A * u
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   for (kk = 0; kk < maxIter; kk++)
+   {
+// 清空中间变量
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0.0;
+         ytemp_data[i] = 0.0;
+      }
+
+      // ====== 前向替代：解 L * y = ftemp，Jacobi迭代 ======
+      for (k = 0; k < lower_jacobi_iters; k++)
+      {
+         for (int lev = 0; lev < nlevL; lev++)
+         {
+#pragma omp parallel for private(i, j, jj, sum, begin_row, end_row)
+            for (ii = ilevL[lev]; ii < ilevL[lev + 1]; ii++)
+            {
+               i = jlevL[ii];
+               sum = 0.0;
+               begin_row = L_diag_i[i];
+               end_row = L_diag_i[i + 1];
+
+               for (j = begin_row; j < end_row; j++)
+               {
+                  jj = L_diag_j[j];
+                  if (jj != i) // 单位对角，跳过
+                     sum += L_diag_data[j] * ytemp_data[jj];
+               }
+               ytemp_data[i] = ftemp_data[i] - sum;
+            }
+         }
+      }
+
+      // ====== 后向替代：解 U * utemp = D⁻¹ * ytemp，Jacobi迭代 ======
+      for (k = 0; k < upper_jacobi_iters; k++)
+      {
+         for (int lev = 0; lev < nlevU; lev++)
+         {
+#pragma omp parallel for private(i, j, jj, sum, begin_row, end_row)
+            for (ii = ilevU[lev]; ii < ilevU[lev + 1]; ii++)
+            {
+               i = jlevU[ii];
+               sum = 0.0;
+               begin_row = U_diag_i[i];
+               end_row = U_diag_i[i + 1];
+
+               for (j = begin_row; j < end_row; j++)
+               {
+                  jj = U_diag_j[j];
+                  if (jj != i)
+                     sum += U_diag_data[j] * utemp_data[jj];
+               }
+
+               utemp_data[i] = D[i] * (ytemp_data[i] - sum);
+            }
+         }
+      }
+
+      // 累加 u ← u + utemp，更新残差
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(ytemp_data);
+   free(u_new);
+   return jx_error_flag;
+}
+
+// JX_Int jx_MultiColorTriangularSolve1(jx_ParCSRMatrix *A,jx_ParVector *f,
+//                                     jx_ParVector *u,JX_Int nLU,jx_ParCSRMatrix *L,
+//                                     JX_Real *D,jx_ParCSRMatrix *U,jx_ParVector *ftemp,
+//                                     jx_ParVector *utemp,JX_Int nlevL, JX_Int *jlevL,
+//                                     JX_Int *ilevL,JX_Int nlevU,JX_Int *jlevU,
+//                                     JX_Int *ilevU,JX_Int maxIter,JX_Int lower_jacobi_iters,
+//                                     JX_Int upper_jacobi_iters,JX_Int *L_perm, JX_Int *L_iperm,
+//                                     JX_Int *U_perm, JX_Int *U_iperm)
+// {
+//     jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+//     JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+//     JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+//     JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+//     jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+//     JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+//     JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+//     JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+//       jx_Vector *f_local = jx_ParVectorLocalVector(f);
+//     jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//     JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+//     jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+//     JX_Real *utemp_data = jx_VectorData(utemp_local);
+
+//     JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+//    JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+//     JX_Int i, j, ii, jj, k, kk;
+//     JX_Int begin_row, end_row;
+//     JX_Real sum;
+//     JX_Real alpha = -1.0;
+//     JX_Real beta = 1.0;
+
+//     // 初始残差 ftemp = f - A * u
+//    jx_ParVectorCopy(f, ftemp);
+//    jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//     for (kk = 0; kk < maxIter; kk++)
+//     {
+//       //   // 清空中间变量
+//       //   #pragma omp parallel for
+//       //   for (i = 0; i < nLU; i++) {
+//       //       utemp_data[i] = 0.0;
+//       //       ytemp_data[i] = 0.0;
+//       //   }
+//       #pragma omp parallel for
+//       for (i = 0; i < nLU; i++)
+//       {
+//          ytemp_data[L_perm[i]] = ftemp_data[i];
+//          u_new[i] = 0;
+//       }
+
+//         // ====== 前向替代：解 L * y = ftemp，Jacobi迭代 ======
+//         for (k = 0; k < lower_jacobi_iters; k++)
+//         {
+//             for (int lev = 0; lev < nlevL; lev++)
+//             {
+//                 #pragma omp parallel for private(j, jj, sum, begin_row, end_row)
+//                for (ii = ilevL[lev]; ii < ilevL[lev + 1]; ii++)
+//                 {
+//                      i = jlevL[ii];
+//                     sum = 0.0;
+//                     begin_row = L_diag_i[i];
+//                     end_row = L_diag_i[i + 1];
+
+//                     for (j = begin_row; j < end_row; j++)
+//                     {
+//                         jj = L_diag_j[j];
+//                         if (jj != i) // 单位对角，跳过
+//                             sum += L_diag_data[j] * u_new[jj];
+//                     }
+//                     u_new[i] = ytemp_data[i] - sum;
+//                 }
+//             }
+//         }
+//         #pragma omp parallel for
+//          for (i = 0; i < nLU; i++)
+//          {
+//             utemp_data[L_iperm[i]] = u_new[i];
+//          }
+//          #pragma omp parallel for
+//          for (i = 0; i < nLU; i++)
+//          {
+//             ytemp_data[U_perm[i]] = utemp_data[i];
+//             u_new[i] = 0;
+//          }
+
+//         // ====== 后向替代：解 U * utemp = D⁻¹ * ytemp，Jacobi迭代 ======
+//         for (k = 0; k < upper_jacobi_iters; k++)
+//         {
+//             for (int lev = 0; lev < nlevU; lev++)
+//             {
+//                 #pragma omp parallel for private(j, jj, sum, begin_row, end_row)
+//                //  for (ii = ilevU[lev]; ii < ilevU[lev + 1]; ii++)
+//                for (ii = ilevU[lev]; ii < ilevU[lev + 1]; ii++)
+//                 {
+//                      // i = nLU-1 -i;
+//                    i = jlevU[ii];
+//                   // i = U_perm[i];
+//                     sum = 0.0;
+//                     begin_row = U_diag_i[i];
+//                     end_row = U_diag_i[i + 1];
+
+//                     for (j = begin_row; j < end_row; j++)
+//                     {
+//                         jj = U_diag_j[j];
+//                         if (jj != i)
+//                             sum += U_diag_data[j] * u_new[jj];
+//                     }
+//                     u_new[i] = D[U_iperm[i]] * (ytemp_data[i] - sum);
+//                 }
+//             }
+//         }
+
+//          #pragma omp parallel for
+//          for (i = 0; i < nLU; i++)
+//          {
+//             utemp_data[U_iperm[i]] = u_new[i];
+//          }
+
+//         // 累加 u ← u + utemp，更新残差
+//         jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+//         jx_ParVectorAxpy(beta, utemp, u);
+//     }
+
+//     free(ytemp_data);
+//     free(u_new);
+//     return jx_error_flag;
+// }
+
+JX_Int jx_MultiColorTriangularSolve1(jx_ParCSRMatrix *A, jx_ParVector *f,
+                                     jx_ParVector *u, JX_Int nLU, jx_ParCSRMatrix *L,
+                                     JX_Real *D, jx_ParCSRMatrix *U, jx_ParVector *ftemp,
+                                     jx_ParVector *utemp, JX_Int nlevL, JX_Int *jlevL,
+                                     JX_Int *ilevL, JX_Int nlevU, JX_Int *jlevU,
+                                     JX_Int *ilevU, JX_Int maxIter, JX_Int lower_jacobi_iters,
+                                     JX_Int upper_jacobi_iters, JX_Int *L_perm, JX_Int *L_iperm,
+                                     JX_Int *U_perm, JX_Int *U_iperm)
+{
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   jx_Vector *f_local = jx_ParVectorLocalVector(f);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   JX_Int i, j, ii, jj, k, kk;
+   JX_Int begin_row, end_row;
+   JX_Real sum;
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+
+   // 初始残差 ftemp = f - A * u
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   for (kk = 0; kk < maxIter; kk++)
+   {
+//   // 清空中间变量
+//   #pragma omp parallel for
+//   for (i = 0; i < nLU; i++) {
+//       utemp_data[i] = 0.0;
+//       ytemp_data[i] = 0.0;
+//   }
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         ytemp_data[i] = ftemp_data[i];
+         u_new[i] = 0;
+      }
+
+      // ====== 前向替代：解 L * y = ftemp，Jacobi迭代 ======
+      for (k = 0; k < lower_jacobi_iters; k++)
+      {
+         for (int lev = 0; lev < nlevL; lev++)
+         {
+#pragma omp parallel for private(j, jj, sum, begin_row, end_row)
+            for (i = ilevL[lev]; i < ilevL[lev + 1]; i++)
+            {
+               sum = 0.0;
+               begin_row = L_diag_i[i];
+               end_row = L_diag_i[i + 1];
+
+               for (j = begin_row; j < end_row; j++)
+               {
+                  jj = L_diag_j[j];
+                  sum += L_diag_data[j] * u_new[jj];
+               }
+               u_new[L_iperm[i]] = ytemp_data[L_iperm[i]] - sum;
+            }
+         }
+      }
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         ytemp_data[i] = u_new[i];
+         u_new[i] = 0;
+      }
+
+      // ====== 后向替代：解 U * utemp = D⁻¹ * ytemp，Jacobi迭代 ======
+      for (k = 0; k < upper_jacobi_iters; k++)
+      {
+         for (int lev = 0; lev < nlevU; lev++)
+         {
+#pragma omp parallel for private(j, jj, sum, begin_row, end_row)
+            //  for (ii = ilevU[lev]; ii < ilevU[lev + 1]; ii++)
+            for (ii = ilevU[lev]; ii < ilevU[lev + 1]; ii++)
+            {
+               i = ii; // nLU - ii -1;
+               sum = 0.0;
+               begin_row = U_diag_i[i];
+               end_row = U_diag_i[i + 1];
+
+               for (j = begin_row; j < end_row; j++)
+               {
+                  jj = U_diag_j[j];
+                  sum += U_diag_data[j] * u_new[jj];
+               }
+               u_new[U_iperm[i]] = D[U_iperm[i]] * (ytemp_data[U_iperm[i]] - sum);
+            }
+         }
+      }
+
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = u_new[i];
+      }
+
+      // 累加 u ← u + utemp，更新残差
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(ytemp_data);
+   free(u_new);
+   return jx_error_flag;
+}
+
+// JX_Int jx_MultiColorTriangularSolve(jx_ParCSRMatrix *A,
+//                                     jx_ParVector *f,
+//                                     jx_ParVector *u,
+//                                     JX_Int nLU,
+//                                     jx_ParCSRMatrix *L,
+//                                     JX_Real *D,
+//                                     jx_ParCSRMatrix *U,
+//                                     jx_ParVector *ftemp,
+//                                     jx_ParVector *utemp,
+//                                     JX_Int nlevL,
+//                                     JX_Int *jlevL,
+//                                     JX_Int *ilevL,
+//                                     JX_Int nlevU,
+//                                     JX_Int *jlevU,
+//                                     JX_Int *ilevU,
+//                                     JX_Int maxIter)
+// {
+//     jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+//     JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+//     JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+//     JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+//     jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+//     JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+//     JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+//     JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+//     jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//     JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+//     jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+//     JX_Real *utemp_data = jx_VectorData(utemp_local);
+//     JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+//     JX_Int i, jj, j, iter, k;
+//     JX_Int begin_row, end_row;
+//     JX_Real sum;
+
+//     JX_Real alpha = -1.0;
+//     JX_Real beta = 1.0;
+//     jx_ParVectorCopy(f, ftemp);
+//     jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//     for (i = 0; i < nLU; i++) {
+//         utemp_data[i] = 0;
+//         ytemp_data[i] = 0;
+//     }
+
+//     for (iter = 0; iter < maxIter; iter++)
+//     {
+//         // === 前向替代：解 L * y = ftemp ===
+//         for (k = 0; k < 1; k++) {
+//             for (i = k; i < nLU; i += 1) {
+//                 sum = ftemp_data[i];
+//                 begin_row = L_diag_i[i];
+//                 end_row = L_diag_i[i + 1];
+//                 for (j = begin_row; j < end_row; j++) {
+//                     jj = L_diag_j[j];
+//                     if (jj < i) {
+//                         sum -= L_diag_data[j] * ytemp_data[jj];
+//                     }
+//                 }
+//                 ytemp_data[i] = sum; // L 为单位下三角
+//             }
+//         }
+//     }
+
+//     for (iter = 0; iter < maxIter; iter++)
+//     {
+//         // === 后向替代：解 U * utemp = D⁻¹ * y ===
+//         for (k = 0; k < 1; k++) {
+//             for (i = nLU - 1 - k; i >= 0; i -= 1) {
+//                 sum = ytemp_data[i];
+//                 begin_row = U_diag_i[i];
+//                 end_row = U_diag_i[i + 1];
+//                 for (j = begin_row; j < end_row; j++) {
+//                     jj = U_diag_j[j];
+//                     if (jj > i) {
+//                         sum -= U_diag_data[j] * utemp_data[jj];
+//                     }
+//                 }
+//                 utemp_data[i] = sum * D[i];
+//             }
+//         }
+//     }
+
+//     jx_ParVectorAxpy(beta, utemp, u);
+//     free(ytemp_data);
+//     return jx_error_flag;
+// }
+
+// //单次GS即直接三角求解
+// JX_Int jx_GSTriangularSolve(jx_ParCSRMatrix *A,
+//                                     jx_ParVector *f,
+//                                     jx_ParVector *u,
+//                                     JX_Int nLU,
+//                                     jx_ParCSRMatrix *L,
+//                                     JX_Real *D,
+//                                     jx_ParCSRMatrix *U,
+//                                     jx_ParVector *ftemp,
+//                                     jx_ParVector *utemp)
+// {
+//     /* 提取 L 和 U 的对角块 */
+//     jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+//     JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+//     JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+//     JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+//     jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+//     JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+//     JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+//     JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+//     /* 获取向量数据 */
+//     jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//     JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+//    jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+//    JX_Real   *utemp_data  = jx_VectorData(utemp_local);
+
+//     JX_Real sum;
+//     JX_Int begin_row, end_row, i, jj, j, iter;
+
+//       /* 计算残差：ftemp = f - A * u */
+//    JX_Real alpha = -1.0;
+//    JX_Real beta = 1.0;
+//    jx_ParVectorCopy(f, ftemp);
+//    jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//       /* 初始化 utemp = ftemp */
+//    for ( i = 0; i < nLU; i++) {
+//       utemp_data[i] = ftemp_data[i];
+//    }
+
+//    /* 前向替换：解单位下三角矩阵方程 L * ftemp = ftemp */
+//    for (i = 0; i < nLU; i++) {
+//       sum = utemp_data[i]; // 初始化 sum
+//       begin_row = L_diag_i[i];
+//       end_row = L_diag_i[i + 1];
+//       for (j = begin_row; j < end_row; j++) {
+//             jj = L_diag_j[j];
+//             if (jj < i) { /* 严格下三角 */
+//                sum -= L_diag_data[j] * utemp_data[jj];
+//             }
+//       }
+//       utemp_data[i] = sum; /* L 对角线为 1 */
+//    }
+
+//    /* 后向替换：解上三角矩阵方程 U * u = D⁻¹ * ftemp */
+//    for (i = nLU - 1; i >= 0; i--) {
+//       sum = utemp_data[i]; // 初始化 sum
+//       begin_row = U_diag_i[i];
+//       end_row = U_diag_i[i + 1];
+//       for (j = begin_row; j < end_row; j++) {
+//             jj = U_diag_j[j];
+//             if (jj > i) { /* 严格上三角 */
+//                sum -= U_diag_data[j] * utemp_data[jj];
+//             }
+//       }
+//       utemp_data[i] = sum * D[i]; /* 应用对角逆缩放 */
+//    }
+
+//    jx_ParVectorAxpy(beta, utemp, u);
+
+//    return jx_error_flag;
+// }
+
+// JX_Int jx_JacobiTriangularSolve(jx_ParCSRMatrix *A, jx_ParVector *f, jx_ParVector *u,
+//                                 JX_Int nLU, jx_ParCSRMatrix *L, JX_Real *D, jx_ParCSRMatrix *U,
+//                                 jx_ParVector *ftemp, jx_ParVector *utemp,JX_Int maxIter)
+// {
+//     /* 提取 L 和 U 的对角块 */
+//     jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+//     JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+//     JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+//     JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+//     jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+//     JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+//     JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+//     JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+//     /* 获取向量数据 */
+//     jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//     JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+//     jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+//     JX_Real *utemp_data = jx_VectorData(utemp_local);
+
+//     /* 创建中间数组用于存储新迭代的解 */
+//     JX_Real *utemp_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+//     JX_Real sum;
+//     JX_Int i, j, jj, iter, begin_row, end_row;
+
+//     /* 计算初始残差：ftemp = f - A * u */
+//     JX_Real alpha = -1.0, beta = 1.0;
+//     jx_ParVectorCopy(f, ftemp);
+//     jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//     /* 初始化 utemp = ftemp */
+//     for (i = 0; i < nLU; i++) {
+//         utemp_data[i] = ftemp_data[i];
+//     }
+
+//     /* Jacobi 迭代 */
+//     for (iter = 0; iter < maxIter; iter++) {
+//         /* 计算新解：utemp_new = D⁻¹ * (ftemp - (L + U) * utemp) */
+//         for (i = 0; i < nLU; i++) {
+//             sum = ftemp_data[i]; // 残差项
+
+//             /* 计算 L * utemp 的贡献（严格下三角） */
+//             begin_row = L_diag_i[i];
+//             end_row = L_diag_i[i + 1];
+//             for (j = begin_row; j < end_row; j++) {
+//                 jj = L_diag_j[j];
+//                 if (jj != i) { /* 排除对角元素 */
+//                     sum -= L_diag_data[j] * utemp_data[jj];
+//                 }
+//             }
+
+//             /* 计算 U * utemp 的贡献（严格上三角） */
+//             begin_row = U_diag_i[i];
+//             end_row = U_diag_i[i + 1];
+//             for (j = begin_row; j < end_row; j++) {
+//                 jj = U_diag_j[j];
+//                 if (jj != i) { /* 排除对角元素 */
+//                     sum -= U_diag_data[j] * utemp_data[jj];
+//                 }
+//             }
+
+//             /* 应用对角逆缩放 */
+//             utemp_new[i] = sum * D[i];
+//         }
+
+//         /* 更新 utemp 为新解 */
+//         for (i = 0; i < nLU; i++) {
+//             utemp_data[i] = utemp_new[i];
+//         }
+//     }
+
+//     /* 更新最终解：u = u + utemp */
+//     jx_ParVectorAxpy(beta, utemp, u);
+
+//     /* 释放中间数组 */
+//     free(utemp_new);
+
+//    return jx_error_flag;
+// }
+
+JX_Int
+jx_JacobiTriangularSolve(jx_ParCSRMatrix *A,
+                         jx_ParVector *f,
+                         jx_ParVector *u,
+                         JX_Int *perm,
+                         JX_Int nLU,
+                         jx_ParCSRMatrix *L,
+                         JX_Real *D,
+                         jx_ParCSRMatrix *U,
+                         jx_ParVector *ftemp,
+                         jx_ParVector *utemp,
+                         JX_Int maxIter,
+                         JX_Int lower_jacobi_iters,
+                         JX_Int upper_jacobi_iters)
+{
+   /* Data objects for L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk, iter;
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* Initialize iteration to 0 */
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   /* 迭代 maxIter 次 */
+   for (iter = 0; iter < maxIter; iter++)
+   {
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0.0;
+      }
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < lower_jacobi_iters; kk++) // lower_jacobi_iters
+      {
+#pragma omp parallel for private(i, j, k1, k2, sum)
+         for (i = 0; i < nLU; i++)
+         {
+            sum = 0.0;
+            k1 = L_diag_i[i];
+            k2 = L_diag_i[i + 1];
+            for (j = k1; j < k2; j++)
+            {
+               sum += L_diag_data[j] * utemp_data[L_diag_j[j]];
+            }
+            ytemp_data[i] = ftemp_data[i] - sum;
+         }
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+            utemp_data[i] = ytemp_data[i];
+      } /* end jacobi loop */
+
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0.0;
+      }
+
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < upper_jacobi_iters; kk++) // upper_jacobi_iters
+      {
+#pragma omp parallel for private(i, j, k1, k2, sum)
+         /* u^{k+1} = f - Uu^k */
+         for (i = 0; i < nLU; ++i)
+         {
+            sum = 0.0;
+            k1 = U_diag_i[i];
+            k2 = U_diag_i[i + 1];
+            for (j = k1; j < k2; j++)
+            {
+               sum += U_diag_data[j] * utemp_data[U_diag_j[j]];
+            }
+            u_new[i] = D[i] * (ytemp_data[i] - sum);
+         }
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+            utemp_data[i] = u_new[i];
+      } /* end jacobi loop */
+
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(u_new);
+   free(ytemp_data);
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_JacobiTriangularSolve22(jx_ParCSRMatrix *A,
+                           jx_ParVector *f,
+                           jx_ParVector *u,
+                           JX_Int *perm,
+                           JX_Int nLU,
+                           jx_ParCSRMatrix *L,
+                           JX_Real *D,
+                           jx_ParCSRMatrix *U,
+                           jx_ParVector *ftemp,
+                           jx_ParVector *utemp,
+                           JX_Int maxIter,
+                           JX_Int lower_jacobi_iters,
+                           JX_Int upper_jacobi_iters)
+{
+   /* Data objects for L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk, iter;
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* Initialize iteration to 0 */
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   /* 迭代 maxIter 次 */
+   for (iter = 0; iter < maxIter; iter++)
+   {
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0.0;
+      }
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < lower_jacobi_iters; kk++) // lower_jacobi_iters
+      {
+#pragma omp parallel for private(i, j, k1, k2, sum)
+         for (i = 0; i < nLU; i++)
+         {
+            sum = 0.0;
+            k1 = L_diag_i[i];
+            k2 = L_diag_i[i + 1];
+            for (j = k1; j < k2; j++)
+            {
+               sum += L_diag_data[j] * utemp_data[L_diag_j[j]];
+            }
+            ytemp_data[i] = ftemp_data[i] - sum;
+         }
+
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            u_new[i] = 0.0;
+         }
+
+#pragma omp parallel for private(i, j, k1, k2, sum)
+         /* u^{k+1} = f - Uu^k */
+         for (i = 0; i < nLU; ++i)
+         {
+            sum = 0.0;
+            k1 = U_diag_i[i];
+            k2 = U_diag_i[i + 1];
+            for (j = k1; j < k2; j++)
+            {
+               sum += U_diag_data[j] * u_new[U_diag_j[j]];
+            }
+            utemp_data[i] = D[i] * (ytemp_data[i] - sum);
+         }
+      } /* end jacobi loop */
+
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(u_new);
+   free(ytemp_data);
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_JacobiTriangularSolve33(jx_ParCSRMatrix *A,
+                           jx_ParVector *f,
+                           jx_ParVector *u,
+                           JX_Int *perm,
+                           JX_Int nLU,
+                           jx_ParCSRMatrix *L,
+                           JX_Real *D,
+                           jx_ParCSRMatrix *U,
+                           jx_ParVector *ftemp,
+                           jx_ParVector *utemp,
+                           JX_Int maxIter,
+                           JX_Int lower_jacobi_iters,
+                           JX_Int upper_jacobi_iters)
+{
+   /* Data objects for L and U */
+   jx_CSRMatrix *A_diag = jx_ParCSRMatrixDiag(A);
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *u_local = jx_ParVectorLocalVector(u);
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk, iter;
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* Initialize iteration to 0 */
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   /* 迭代 maxIter 次 */
+   for (iter = 0; iter < maxIter; iter++)
+   {
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0.0;
+      }
+
+      for (kk = 0; kk < lower_jacobi_iters; kk++) // lower_jacobi_iters
+      {
+#pragma omp parallel for private(i, j, k1, k2, sum)
+         for (i = 0; i < nLU; i++)
+         {
+            sum = 0.0;
+            k1 = L_diag_i[i];
+            k2 = L_diag_i[i + 1];
+            for (j = k1; j < k2; j++)
+            {
+               sum += L_diag_data[j] * utemp_data[L_diag_j[j]];
+            }
+            ytemp_data[i] = ftemp_data[i] - sum;
+         }
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            u_new[i] = 0.0;
+         }
+#pragma omp parallel for private(i, j, k1, k2, sum)
+         for (i = 0; i < nLU; ++i)
+         {
+            sum = 0.0;
+            k1 = U_diag_i[i];
+            k2 = U_diag_i[i + 1];
+            for (j = k1; j < k2; j++)
+            {
+               sum += U_diag_data[j] * u_new[U_diag_j[j]];
+            }
+            utemp_data[i] = D[i] * (ytemp_data[i] - sum);
+         }
+
+         jx_CSRMatrixMatvec(alpha, A_diag, utemp_local, beta, ftemp_local);
+         jx_ParVectorAxpy(beta, utemp, u);
+      }
+      jx_ParVectorCopy(f, ftemp);
+      jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+   }
+
+   free(u_new);
+   free(ytemp_data);
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_JacobiTriangularSolve_spmv(jx_ParCSRMatrix *A,
+                              jx_ParVector *f,
+                              jx_ParVector *u,
+                              JX_Int *perm,
+                              JX_Int nLU,
+                              jx_ParCSRMatrix *L,
+                              JX_Real *D,
+                              jx_ParCSRMatrix *U,
+                              jx_ParVector *ftemp,
+                              jx_ParVector *utemp,
+                              JX_Int maxIter,
+                              JX_Int lower_jacobi_iters,
+                              JX_Int upper_jacobi_iters)
+{
+   /* Data objects for L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk, iter;
+
+   // char FileNameCoaMat[256];
+   //  jx_sprintf(FileNameCoaMat, "A_CSR_%d", 1);
+   //  jx_ParCSRMatrixPrint(A, FileNameCoaMat);
+   //  jx_sprintf(FileNameCoaMat, "L_CSR_%d", 1);
+   //  jx_ParCSRMatrixPrint(L, FileNameCoaMat);
+   //  jx_sprintf(FileNameCoaMat, "U_CSR_%d", 1);
+   //  jx_ParCSRMatrixPrint(U, FileNameCoaMat);
+
+   // FILE *fp;
+   // jx_sprintf(FileNameCoaMat, "D_%d", 1);
+   // fp = fopen(FileNameCoaMat, "w");
+   // for(j = 0; j < nLU; j++){
+   // jx_fprintf(fp, "%.14e\n", D[j]);
+   // }
+   // fclose(fp);
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* Initialize iteration to 0 */
+   // JX_Real  *unew = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   jx_Vector *ytemp = jx_SeqVectorCreate(nLU);
+   jx_SeqVectorInitialize(ytemp);
+   JX_Real *ytemp_data = jx_VectorData(ytemp);
+
+   jx_Vector *unew = jx_SeqVectorCreate(nLU);
+   jx_SeqVectorInitialize(unew);
+   JX_Real *unew_data = jx_VectorData(unew);
+
+   // JX_Real  *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   /* 迭代 maxIter 次 */
+   for (iter = 0; iter < maxIter; iter++)
+   {
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = ftemp_data[i];
+         ytemp_data[i] = 0;
+      }
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < lower_jacobi_iters; kk++) // lower_jacobi_iters
+      {
+         // jx_CSRMatrixMatvec_LU(alpha,L_diag, ytemp, beta, ftemp_local);
+         jx_CSRMatrixMatvec(alpha, L_diag, ytemp, 0, utemp_local);
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            ytemp_data[i] = ftemp_data[i] + utemp_data[i];
+         }
+
+      } /* end jacobi loop */
+
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0;
+         unew_data[i] = 0;
+      }
+
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < upper_jacobi_iters; kk++) // upper_jacobi_iters
+      {
+         // jx_CSRMatrixMatvec_LU(alpha,L_diag, utemp_local, beta, ytemp);
+         jx_CSRMatrixMatvec(alpha, U_diag, utemp_local, 0, unew);
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            utemp_data[i] = D[i] * (ytemp_data[i] + unew_data[i]);
+         }
+      } /* end jacobi loop */
+
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   // free(u_new);
+   // free(ytemp_data);
+   jx_SeqVectorDestroy(ytemp);
+   jx_SeqVectorDestroy(unew);
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_JacobiTriangularSolve_spmv1(jx_ParCSRMatrix *A,
+                               jx_ParVector *f,
+                               jx_ParVector *u,
+                               JX_Int *perm,
+                               JX_Int nLU,
+                               jx_ParCSRMatrix *L,
+                               JX_Real *D,
+                               jx_ParVector *D_array,
+                               jx_ParCSRMatrix *U,
+                               jx_ParVector *ftemp,
+                               jx_ParVector *utemp,
+                               JX_Int maxIter,
+                               JX_Int lower_jacobi_iters,
+                               JX_Int upper_jacobi_iters)
+{
+   /* Data objects for L and U */
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   /* Vectors */
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+   jx_Vector *D_local = jx_ParVectorLocalVector(D_array);
+   JX_Real *D_data = jx_VectorData(D_local);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk, iter;
+
+   /* Initialize Utemp to zero.
+    * This is necessary for correctness, when we use optimized
+    * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+    */
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   /* Initialize iteration to 0 */
+   // JX_Real  *unew = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   jx_Vector *ytemp = jx_SeqVectorCreate(nLU);
+   jx_SeqVectorInitialize(ytemp);
+   JX_Real *ytemp_data = jx_VectorData(ytemp);
+
+   jx_Vector *unew = jx_SeqVectorCreate(nLU);
+   jx_SeqVectorInitialize(unew);
+   JX_Real *unew_data = jx_VectorData(unew);
+
+   // JX_Real  *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   // memcpy(D_data, D, nLU * sizeof(JX_Real)); // 只执行一次
+   /* 迭代 maxIter 次 */
+   for (iter = 0; iter < maxIter; iter++)
+   {
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = ftemp_data[i];
+         ytemp_data[i] = 0;
+      }
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < lower_jacobi_iters; kk++) // lower_jacobi_iters
+      {
+         // jx_CSRMatrixMatvec_LU(alpha,L_diag, ytemp, beta, ftemp_local);
+         jx_CSRMatrixMatvec(alpha, L_diag, ytemp, 0, utemp_local);
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            ytemp_data[i] = ftemp_data[i] + utemp_data[i];
+         }
+
+      } /* end jacobi loop */
+
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0;
+         unew_data[i] = 0;
+      }
+
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < upper_jacobi_iters; kk++) // upper_jacobi_iters
+      {
+         // jx_CSRMatrixMatvec_LU(alpha,L_diag, utemp_local, beta, ytemp);
+         jx_CSRMatrixMatvec(alpha, U_diag, utemp_local, 0, unew);
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            utemp_data[i] = D_data[i] * (ytemp_data[i] + unew_data[i]);
+         }
+      } /* end jacobi loop */
+
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   // free(u_new);
+   // free(ytemp_data);
+   jx_SeqVectorDestroy(ytemp);
+   jx_SeqVectorDestroy(unew);
+
+   return jx_error_flag;
+}
+
+JX_Int
+jx_parJacobi_TriangularSolve(jx_ParCSRMatrix *A,
+                             jx_ParVector *f,
+                             jx_ParVector *u,
+                             JX_Int nLU,
+                             jx_ParCSRMatrix *L,
+                             jx_ParVector *D_vector,
+                             jx_ParCSRMatrix *U,
+                             jx_ParVector *ftemp,
+                             jx_ParVector *utemp,
+                             jx_ParVector *unew,
+                             jx_ParVector *ytemp,
+                             JX_Int maxIter,
+                             JX_Int lower_jacobi_iters,
+                             JX_Int upper_jacobi_iters)
+{
+   MPI_Comm comm = jx_ParCSRMatrixComm(A);
+
+   /* Local variables */
+   JX_Real alpha = -1.0;
+   JX_Real beta = 1.0;
+   JX_Real sum;
+   JX_Int i, j, k1, k2, kk, iter;
+
+   // jx_ParVectorSetConstantValues( utemp, 0.);
+   /* compute residual */
+
+   // char FileNameCoaMat[256];
+   //  jx_sprintf(FileNameCoaMat, "A_CSR_%d", 4);
+   //  jx_ParCSRMatrixPrint(A, FileNameCoaMat);
+   //  jx_sprintf(FileNameCoaMat, "L_CSR_%d", 4);
+   //  jx_ParCSRMatrixPrint(L, FileNameCoaMat);
+   //  jx_sprintf(FileNameCoaMat, "U_CSR_%d", 4);
+   //  jx_ParCSRMatrixPrint(U, FileNameCoaMat);
+
+   // jx_sprintf(FileNameCoaMat, "  D_CSR_%d", 4);
+   //  jx_ParVectorPrint(D_vector, FileNameCoaMat);
+
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   // jx_ParVector *ytemp = jx_ParVectorCreate(comm, jx_ParVectorGlobalSize(u), jx_ParVectorPartitioning(u));
+   // jx_ParVectorInitialize(ytemp);
+   // jx_ParVectorSetPartitioningOwner(ytemp,0);
+
+   // jx_ParVector *unew = jx_ParVectorCreate(comm, jx_ParVectorGlobalSize(u), jx_ParVectorPartitioning(u));
+   // jx_ParVectorInitialize(unew);
+   // jx_ParVectorSetPartitioningOwner(unew,0);
+   // jx_ParVectorSetConstantValues(unew, 0);
+
+   // jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   // jx_Vector *D_local = jx_ParVectorLocalVector(D_vector);
+   // jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   jx_Vector *D_local = jx_ParVectorLocalVector(D_vector);
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   jx_Vector *ytemp_local = jx_ParVectorLocalVector(ytemp);
+   jx_Vector *unew_local = jx_ParVectorLocalVector(unew);
+
+   JX_Real *D_data = jx_VectorData(D_local);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   JX_Real *ytemp_data = jx_VectorData(ytemp_local);
+   JX_Real *unew_data = jx_VectorData(unew_local);
+
+   // JX_Real  *D_data = jx_VectorData(D_local);
+   // JX_Real  *ftemp_data = jx_VectorData(ftemp_local);
+   // JX_Real  *utemp_data = jx_VectorData(utemp_local);
+
+   /* 迭代 maxIter 次 */
+   for (iter = 0; iter < maxIter; iter++)
+   {
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0;
+         ytemp_data[i] = 0;
+         unew_data[i] = 0;
+      }
+
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < lower_jacobi_iters; kk++) // lower_jacobi_iters
+      {
+         jx_ParCSRMatrixMatvec(alpha, L, ytemp, 0, utemp);
+// jx_ParVectorAxpy(1,ftemp, utemp);
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            ytemp_data[i] = utemp_data[i] + ftemp_data[i];
+         }
+
+      } /* end jacobi loop */
+
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+      {
+         utemp_data[i] = 0;
+      }
+
+      /* Jacobi iteration loop */
+      for (kk = 0; kk < upper_jacobi_iters; kk++) // upper_jacobi_iters
+      {
+         jx_ParCSRMatrixMatvec(alpha, U, utemp, 0, unew);
+// jx_ParVectorAxpy(1,ytemp, unew);
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+         {
+            utemp_data[i] = D_data[i] * (ytemp_data[i] + unew_data[i]);
+         }
+         // jx_ParVecMul(D_vector,unew,utemp);
+         // jx_ParVectorCopy(utemp, ytemp);
+      } /* end jacobi loop */
+
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   // jx_ParVectorDestroy(ytemp);
+   // jx_ParVectorDestroy(unew);   /* 修正：释放 unew，避免内存泄漏 */
+
+   return jx_error_flag;
+}
+
+// JX_Int
+// jx_gsJacobiTriangularSolve(jx_ParCSRMatrix *A,
+//                      jx_ParVector    *f,
+//                      jx_ParVector    *u,
+//                      JX_Int          *perm,
+//                      JX_Int           nLU,
+//                      jx_ParCSRMatrix *L,
+//                      JX_Real         *D,
+//                      jx_ParCSRMatrix *U,
+//                      jx_ParVector    *ftemp,
+//                      jx_ParVector    *utemp,
+//                      JX_Int           maxIter,
+//                      JX_Int           lower_jacobi_iters,
+//                      JX_Int           upper_jacobi_iters)
+// {
+//    /* Data objects for L and U */
+//    jx_CSRMatrix *L_diag      = jx_ParCSRMatrixDiag(L);
+//    JX_Real      *L_diag_data = jx_CSRMatrixData(L_diag);
+//    JX_Int       *L_diag_i    = jx_CSRMatrixI(L_diag);
+//    JX_Int       *L_diag_j    = jx_CSRMatrixJ(L_diag);
+//    jx_CSRMatrix *U_diag      = jx_ParCSRMatrixDiag(U);
+//    JX_Real      *U_diag_data = jx_CSRMatrixData(U_diag);
+//    JX_Int       *U_diag_i    = jx_CSRMatrixI(U_diag);
+//    JX_Int       *U_diag_j    = jx_CSRMatrixJ(U_diag);
+
+//    /* Vectors */
+//    jx_Vector    *utemp_local = jx_ParVectorLocalVector(utemp);
+//    JX_Real      *utemp_data  = jx_VectorData(utemp_local);
+//    jx_Vector    *ftemp_local = jx_ParVectorLocalVector(ftemp);
+//    JX_Real      *ftemp_data  = jx_VectorData(ftemp_local);
+
+//    /* Local variables */
+//    JX_Real       alpha       = -1.0;
+//    JX_Real       beta        = 1.0;
+//    JX_Real       sum;
+//    JX_Int        i, j, k1, k2, kk,iter;
+
+//    /* Initialize Utemp to zero.
+//     * This is necessary for correctness, when we use optimized
+//     * vector operations in the case where sizeof(L, D or U) < sizeof(A)
+//     */
+//    //jx_ParVectorSetConstantValues( utemp, 0.);
+//    /* compute residual */
+//    jx_ParVectorCopy(f, ftemp);
+//    jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+//    /* Initialize iteration to 0 */
+//    JX_Real  *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+//        /* 迭代 maxIter 次 */
+//     for (iter = 0; iter < maxIter; iter++)
+//     {
+//       #pragma omp parallel for
+//       for (i = 0; i < nLU; i++)
+//       {
+//          utemp_data[i] = 0.0;
+//          ytemp_data[i] = 0.0;
+//       }
+//       /* Jacobi iteration loop */
+//       for ( kk = 0; kk < lower_jacobi_iters; kk++ )  //lower_jacobi_iters
+//       {
+//          #pragma omp parallel for private(i,j, k1, k2, sum)
+//          for ( i = 0; i< nLU; i++ )
+//          {
+//             sum = 0.0;
+//             k1 = L_diag_i[i] ; k2 = L_diag_i[i + 1];
+//             for (j = k1; j < k2; j++)
+//             {
+//                sum += L_diag_data[j] * ytemp_data[L_diag_j[j]];
+//             }
+//             ytemp_data[i] = ftemp_data[i] - sum;
+//          }
+//       } /* end jacobi loop */
+//       /* Jacobi iteration loop */
+//       for ( kk = 0; kk < upper_jacobi_iters; kk++ )  //upper_jacobi_iters
+//       {
+//          #pragma omp parallel for private(i,j, k1, k2, sum)
+//          /* u^{k+1} = f - Uu^k */
+//          for ( i = nLU-1; i >= 0; i-- )
+//          {
+//             sum = 0.0;
+//             k1 = U_diag_i[i] ; k2 = U_diag_i[i + 1];
+//             for (j = k1; j < k2; j++)
+//             {
+//                sum += U_diag_data[j] * utemp_data[U_diag_j[j]];
+//             }
+//             utemp_data[i] = D[i] * (ytemp_data[i] - sum);
+//          }
+//       } /* end jacobi loop */
+
+//       jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+//       jx_ParVectorAxpy(beta, utemp, u);
+//    }
+
+//    free(ytemp_data);
+
+//    return jx_error_flag;
+// }
+
+JX_Int
+jx_JGS_TriangularSolve(jx_ParCSRMatrix *A,
+                       jx_ParVector *f,
+                       jx_ParVector *u,
+                       JX_Int *perm,
+                       JX_Int nLU,
+                       jx_ParCSRMatrix *L,
+                       JX_Real *D,
+                       jx_ParCSRMatrix *U,
+                       jx_ParVector *ftemp,
+                       jx_ParVector *utemp,
+                       JX_Int maxIter,
+                       JX_Int lower_jacobi_iters,
+                       JX_Int upper_jacobi_iters)
+{
+   jx_CSRMatrix *L_diag = jx_ParCSRMatrixDiag(L);
+   JX_Real *L_diag_data = jx_CSRMatrixData(L_diag);
+   JX_Int *L_diag_i = jx_CSRMatrixI(L_diag);
+   JX_Int *L_diag_j = jx_CSRMatrixJ(L_diag);
+
+   jx_CSRMatrix *U_diag = jx_ParCSRMatrixDiag(U);
+   JX_Real *U_diag_data = jx_CSRMatrixData(U_diag);
+   JX_Int *U_diag_i = jx_CSRMatrixI(U_diag);
+   JX_Int *U_diag_j = jx_CSRMatrixJ(U_diag);
+
+   jx_Vector *utemp_local = jx_ParVectorLocalVector(utemp);
+   JX_Real *utemp_data = jx_VectorData(utemp_local);
+   jx_Vector *ftemp_local = jx_ParVectorLocalVector(ftemp);
+   JX_Real *ftemp_data = jx_VectorData(ftemp_local);
+
+   JX_Real alpha = -1.0, beta = 1.0;
+   JX_Int iter, i, j, k1, k2, tid, T;
+
+   JX_Real *u_new = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+   JX_Real *ytemp_data = (JX_Real *)malloc(nLU * sizeof(JX_Real));
+
+   /* 初始化 */
+   jx_ParVectorCopy(f, ftemp);
+   jx_ParCSRMatrixMatvec(alpha, A, u, beta, ftemp);
+
+   T = jx_NumThreads();
+   JX_Int *row_start = (JX_Int *)malloc((T + 1) * sizeof(JX_Int));
+
+   // 行划分
+   JX_Int n1 = nLU / T; // 每个线程最少的行数
+   JX_Int m = nLU % T;  // 前 m 个线程多一行
+
+   row_start[0] = 0;
+   for (tid = 0; tid < T; tid++)
+   {
+      row_start[tid + 1] = row_start[tid] + (tid < m ? n1 + 1 : n1);
+   }
+
+   for (iter = 0; iter < maxIter; iter++)
+   {
+      // 每轮Jacobi，临时缓冲清零
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+         ytemp_data[i] = 0.0;
+      /* 下三角：Jacobi-GS */
+      for (JX_Int kk = 0; kk < lower_jacobi_iters; kk++)
+      {
+#pragma omp parallel private(i, j, k1, k2)
+         {
+            // for (tid = 0; tid < T; tid++) {
+            tid = omp_get_thread_num();
+            JX_Int row_s = row_start[tid];
+            JX_Int row_e = row_start[tid + 1];
+
+            for (i = row_s; i < row_e; i++)
+            {
+               JX_Real sum = 0.0;
+               k1 = L_diag_i[i];
+               k2 = L_diag_i[i + 1];
+
+               for (j = k1; j < k2; j++)
+               {
+                  JX_Int col = L_diag_j[j];
+                  sum += L_diag_data[j] * ytemp_data[col]; // GS更新
+               }
+               ytemp_data[i] = ftemp_data[i] - sum;
+            }
+         }
+
+#pragma omp parallel for
+         for (i = 0; i < nLU; i++)
+            utemp_data[i] = ytemp_data[i];
+      }
+
+      /* 上三角 Jacobi */
+      // 每轮Jacobi，临时缓冲清零
+#pragma omp parallel for
+      for (i = 0; i < nLU; i++)
+         utemp_data[i] = 0.0;
+
+      for (JX_Int kk = 0; kk < upper_jacobi_iters; kk++)
+      {
+#pragma omp parallel private(i, j, k1, k2)
+         {
+            // {
+            // for (tid = 0; tid < T; tid++) {
+            tid = omp_get_thread_num();
+            JX_Int row_s = row_start[tid];
+            JX_Int row_e = row_start[tid + 1];
+
+            for (i = row_e - 1; i >= row_s; i--)
+            {
+               JX_Real sum = 0.0;
+               k1 = U_diag_i[i];
+               k2 = U_diag_i[i + 1];
+
+               for (j = k1; j < k2; j++)
+               {
+                  JX_Int col = U_diag_j[j];
+                  // if (col < row_start[tid])
+                  sum += U_diag_data[j] * utemp_data[col]; // GS更新
+                  // else
+                  //    sum += U_diag_data[j] * utemp_data[col]; // Jacobi部分
+               }
+               utemp_data[i] = D[i] * (ytemp_data[i] - sum);
+            }
+         }
+
+         // #pragma omp parallel for
+         // for (i = 0; i < nLU; i++)
+         //    utemp_data[i] = u_new[i];
+      }
+
+      // 残差更新
+      jx_ParCSRMatrixMatvec(alpha, A, utemp, beta, ftemp);
+      jx_ParVectorAxpy(beta, utemp, u);
+   }
+
+   free(u_new);
+   free(ytemp_data);
+   free(row_start);
+   return jx_error_flag;
+}

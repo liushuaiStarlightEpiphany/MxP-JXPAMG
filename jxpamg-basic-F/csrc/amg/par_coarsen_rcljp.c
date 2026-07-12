@@ -1,0 +1,762 @@
+//========================================================================//
+//  JXFPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
+//  Institute of Applied Physics and Computational Mathematics            //
+//  School of Mathematics and Computational Science Xiangtan University   //
+//========================================================================//
+
+/*!
+ *  par_coarsen_rcljp.c
+ *  Date: 2011/09/03
+ */ 
+
+#include "jxf_pamg.h"
+
+/*==========================================================================
+ * 
+ * Relax CLJP (RCLJP) coarsening,a parallel coarsening algorithm for AMG
+ * based on CLJP algorithm, proposed by Zeyao Mo & Xiaowen Xu, May, 2005.                  
+ * The code was devoloped by Dr. X.Xu, June,2005.
+ * 
+ *==========================================================================*/
+
+#define C_PT  1
+#define F_PT -1
+#define COMMON_C_PT  2
+#define Z_PT -2 
+
+/*!
+ * \fn JXF_Int jxf_PAMGCoarsenRRS0
+ * \brief RCLJP Coarsening routine.
+ * \author Xu Xiaowen
+ * \date June, 2005
+ */ 
+JXF_Int
+jxf_PAMGCoarsenRCLJP( jxf_ParCSRMatrix    *S,
+                     jxf_ParCSRMatrix    *A,
+                     JXF_Int                 measure_type_rlx,
+                     JXF_Int                 number_syn_rlx,
+                     JXF_Real              measure_threshold_rlx,
+                     JXF_Int                 CF_init,
+                     JXF_Int                 debug_flag,
+                     JXF_Int               **CF_marker_ptr )
+{
+   MPI_Comm 	         comm      = jxf_ParCSRMatrixComm(S);
+   jxf_ParCSRCommPkg     *comm_pkg  = jxf_ParCSRMatrixCommPkg(A);
+   jxf_ParCSRCommHandle  *comm_handle = NULL;
+
+
+   jxf_CSRMatrix    *S_diag   = jxf_ParCSRMatrixDiag(S);
+   JXF_Int             *S_diag_i = jxf_CSRMatrixI(S_diag);
+   JXF_Int             *S_diag_j = jxf_CSRMatrixJ(S_diag);
+
+   jxf_CSRMatrix    *S_offd   = jxf_ParCSRMatrixOffd(S);
+   JXF_Int             *S_offd_i = jxf_CSRMatrixI(S_offd);
+   JXF_Int             *S_offd_j = NULL;
+
+   JXF_Int 		   *col_map_offd  = jxf_ParCSRMatrixColMapOffd(S);
+   JXF_Int              num_variables = jxf_CSRMatrixNumRows(S_diag);
+   JXF_Int		    col_1 = jxf_ParCSRMatrixFirstColDiag(S);
+   JXF_Int		    col_n = col_1 + jxf_CSRMatrixNumCols(S_diag);
+   JXF_Int 		    num_cols_offd = 0;
+                  
+   jxf_CSRMatrix    *S_ext   = NULL;
+   JXF_Int             *S_ext_i = NULL;
+   JXF_Int             *S_ext_j = NULL;
+
+   JXF_Int		    num_sends = 0;
+   JXF_Int  	   *int_buf_data;
+   JXF_Real	   *buf_data;
+
+   JXF_Int             *CF_marker;
+   JXF_Int             *CF_marker_offd;
+                      
+   JXF_Real          *measure_array;
+   JXF_Int             *graph_array;
+   JXF_Int             *graph_array_offd;
+   JXF_Int              graph_size;
+   JXF_Int              graph_offd_size;
+   JXF_Int              global_graph_size;
+                      
+   JXF_Int              i, j, k, kc, jS, kS, ig;
+   JXF_Int		    index, start, my_id, num_procs, jrow, cnt;
+                      
+   JXF_Int              ierr = 0;
+   JXF_Int              break_var = 1;
+
+   JXF_Real	    wall_time  = 0.0;
+   JXF_Real           wall_time1 = 0.0;
+   JXF_Real           inset_time = 0.0;
+   JXF_Real           measure_max, measure_global, measure_th;
+   JXF_Int              iter = 0;
+
+   S_ext = NULL;
+   
+   if (debug_flag == 3) wall_time = jxf_time_getWallclockSeconds();
+   
+   jxf_MPI_Comm_size(comm,&num_procs);
+   jxf_MPI_Comm_rank(comm,&my_id);
+
+   if (!comm_pkg)
+   {
+      jxf_MatvecCommPkgCreate(A);
+      comm_pkg = jxf_ParCSRMatrixCommPkg(A); 
+   }
+
+   num_sends = jxf_ParCSRCommPkgNumSends(comm_pkg);
+
+   int_buf_data = jxf_CTAlloc(JXF_Int, jxf_ParCSRCommPkgSendMapStart(comm_pkg, num_sends));
+   buf_data = jxf_CTAlloc(JXF_Real, jxf_ParCSRCommPkgSendMapStart(comm_pkg, num_sends));
+ 
+   num_cols_offd = jxf_CSRMatrixNumCols(S_offd);
+
+   S_diag_j = jxf_CSRMatrixJ(S_diag);
+
+   if (num_cols_offd)
+   {
+      S_offd_j = jxf_CSRMatrixJ(S_offd);
+   }
+   
+  /*----------------------------------------------------------
+   * Compute the measures
+   *
+   * The measures are currently given by the column sums of S.
+   * Hence, measure_array[i] is the number of influences
+   * of variable i.
+   *
+   * The measures are augmented by a random number
+   * between 0 and 1.
+   *----------------------------------------------------------*/
+
+   measure_array = jxf_CTAlloc(JXF_Real, num_variables + num_cols_offd);
+   for (i = 0; i < S_offd_i[num_variables]; i ++)
+   { 
+      measure_array[num_variables + S_offd_j[i]] += 1.0;
+   }
+
+   if (num_procs > 1)
+   {
+      comm_handle = jxf_ParCSRCommHandleCreate(2, comm_pkg, &measure_array[num_variables], buf_data);
+   }
+
+   for (i = 0; i < S_diag_i[num_variables]; i ++)
+   { 
+      measure_array[S_diag_j[i]] += 1.0;
+   }
+
+   if (num_procs > 1)
+   {
+      jxf_ParCSRCommHandleDestroy(comm_handle);
+   }
+
+   index = 0;
+   for (i = 0; i < num_sends; i ++)
+   {
+      start = jxf_ParCSRCommPkgSendMapStart(comm_pkg, i);
+      for (j = start; j < jxf_ParCSRCommPkgSendMapStart(comm_pkg, i+1); j ++)
+      {
+         measure_array[jxf_ParCSRCommPkgSendMapElmt(comm_pkg,j)] += buf_data[index++];
+      }
+   }
+
+   for (i = num_variables; i < num_variables + num_cols_offd; i ++)
+   { 
+      measure_array[i] = 0;
+   }
+
+   /* this augments the measures */
+   jxf_PAMGIndepSetRelaxInit(S, measure_array);
+   
+  /*--------------------------------------------------------------------------
+   * Initialize the graph array
+   * graph_array contains interior points in elements 0 ... num_variables-1
+   * followed by boundary values
+   *-------------------------------------------------------------------------*/
+
+   graph_array = jxf_CTAlloc(JXF_Int, num_variables);
+   if (num_cols_offd) 
+   {
+      graph_array_offd = jxf_CTAlloc(JXF_Int, num_cols_offd);
+   }
+   else
+   {
+      graph_array_offd = NULL;
+   }
+
+   /* initialize measure array and graph array */
+
+   for (ig = 0; ig < num_variables; ig ++)
+   {
+      graph_array[ig] = ig;
+   }
+   for (ig = 0; ig < num_cols_offd; ig ++)
+   {
+      graph_array_offd[ig] = ig;
+   }
+
+   /*-----------------------------------------------------------------
+    * Initialize the C/F marker array
+    * C/F marker array contains interior points in elements 0 ... 
+    * num_variables-1  followed by boundary values
+    *---------------------------------------------------------------*/
+
+   graph_size = num_variables;
+   graph_offd_size = num_cols_offd;
+
+   if (CF_init)
+   {
+      CF_marker = *CF_marker_ptr;
+      cnt = 0;
+      for (i = 0; i < num_variables; i ++)
+      {
+         if ( (S_offd_i[i+1]-S_offd_i[i]) > 0 || CF_marker[i] == -1)
+         {
+            CF_marker[i] = 0;
+         }
+         if ( CF_marker[i] == Z_PT)
+         {
+            if (measure_array[i] >= 1.0 || (S_diag_i[i+1]-S_diag_i[i]) > 0)
+            {
+               CF_marker[i] = 0;
+               graph_array[cnt++] = i;
+            }
+            else
+            {
+               graph_size --;
+               CF_marker[i] = F_PT;
+            }
+         }
+         else
+         {
+            graph_array[cnt++] = i;
+         }
+      }
+   }
+   else
+   {
+      CF_marker = jxf_CTAlloc(JXF_Int, num_variables);
+      for (i = 0; i < num_variables; i ++)
+      {
+         CF_marker[i] = 0;
+      }
+   }
+   if (num_cols_offd)
+   {
+      CF_marker_offd = jxf_CTAlloc(JXF_Int, num_cols_offd);
+   }
+   else
+   {
+      CF_marker_offd = NULL;
+   }
+   for (i = 0; i < num_cols_offd; i ++)
+   {
+      CF_marker_offd[i] = 0;
+   }
+
+  /*---------------------------------------------------
+   * Loop until all points are either fine or coarse.
+   *---------------------------------------------------*/
+
+   if (num_procs > 1)
+   {
+      S_ext   = jxf_ParCSRMatrixExtractBExt(S, A, 0);
+      S_ext_i = jxf_CSRMatrixI(S_ext);
+      S_ext_j = jxf_CSRMatrixJ(S_ext);
+   }
+
+   /*  compress S_ext  and convert column numbers*/
+   index = 0;
+   for (i = 0; i < num_cols_offd; i ++)
+   {
+      for (j = S_ext_i[i]; j < S_ext_i[i+1]; j ++)
+      {
+	 k = S_ext_j[j];
+	 if (k >= col_1 && k < col_n)
+	 {
+	    S_ext_j[index++] = k - col_1;
+	 }
+	 else
+	 {
+	    kc = jxf_BinarySearch(col_map_offd, k, num_cols_offd);
+	    if (kc > -1) 
+	    {
+	       S_ext_j[index++] = -kc - 1;
+	    }
+	 }
+      }
+      S_ext_i[i] = index;
+   }
+   for (i = num_cols_offd; i > 0; i --)
+   {
+      S_ext_i[i] = S_ext_i[i-1];
+   }
+   
+   if (num_procs > 1) 
+   {
+      S_ext_i[0] = 0;
+   }
+
+   if (debug_flag == 3)
+   {
+      wall_time = jxf_time_getWallclockSeconds() - wall_time;
+      jxf_printf("Proc = %d    Initialize CLJP phase = %f\n",my_id, wall_time); 
+   }
+
+
+   while (1)
+   {
+     /*-------------------------------------------------------------
+      * Exchange boundary data, i.i. get measures and S_ext_data
+      *------------------------------------------------------------*/
+
+      if (num_procs > 1)
+      {
+   	 comm_handle = jxf_ParCSRCommHandleCreate(2, comm_pkg, &measure_array[num_variables], buf_data);
+      }
+      if (num_procs > 1)
+      {
+   	 jxf_ParCSRCommHandleDestroy(comm_handle);
+      }
+
+      index = 0;
+      for (i = 0; i < num_sends; i ++)
+      {
+         start = jxf_ParCSRCommPkgSendMapStart(comm_pkg, i);
+         for (j = start; j < jxf_ParCSRCommPkgSendMapStart(comm_pkg, i+1); j ++)
+         {
+            measure_array[jxf_ParCSRCommPkgSendMapElmt(comm_pkg,j)] += buf_data[index++];
+         }
+      }
+
+     /*------------------------------------------------
+      * Set F-pts and update subgraph
+      *------------------------------------------------*/
+      if (iter || !CF_init)
+      {
+         for (ig = 0; ig < graph_size; ig ++)
+         {
+            i = graph_array[ig];
+
+            if ( (CF_marker[i] != C_PT) && (measure_array[i] < 1) )
+            {
+               /* set to be an F-pt */
+               CF_marker[i] = F_PT;
+ 
+	       /* make sure all dependencies have been accounted for */
+               for (jS = S_diag_i[i]; jS < S_diag_i[i+1]; jS ++)
+               {
+                  if (S_diag_j[jS] > -1)
+                  {
+                     CF_marker[i] = 0;
+                  }
+               }
+               for (jS = S_offd_i[i]; jS < S_offd_i[i+1]; jS ++)
+               {
+                  if (S_offd_j[jS] > -1)
+                  {
+                     CF_marker[i] = 0;
+                  }
+               }
+            }
+            if (CF_marker[i])
+            {
+               measure_array[i] = 0;
+ 
+               /* take point out of the subgraph */
+               graph_size --;
+               graph_array[ig] = graph_array[graph_size];
+               graph_array[graph_size] = i;
+               ig --;
+            }
+         }
+      }
+
+     /*------------------------------------------------
+      * Exchange boundary data, i.i. get measures 
+      *------------------------------------------------*/
+
+      if (debug_flag == 3) wall_time = jxf_time_getWallclockSeconds();
+
+      index = 0;
+      for (i = 0; i < num_sends; i ++)
+      {
+        start = jxf_ParCSRCommPkgSendMapStart(comm_pkg, i);
+        for (j = start; j < jxf_ParCSRCommPkgSendMapStart(comm_pkg, i+1); j ++)
+        {
+            jrow = jxf_ParCSRCommPkgSendMapElmt(comm_pkg,j);
+            buf_data[index++] = measure_array[jrow];
+         }
+      }
+
+      if (num_procs > 1)
+      { 
+         comm_handle = jxf_ParCSRCommHandleCreate(1, comm_pkg, buf_data, &measure_array[num_variables]);
+         jxf_ParCSRCommHandleDestroy(comm_handle);   
+      } 
+
+
+     /*------------------------------------------------
+      * Test for convergence
+      *------------------------------------------------*/
+
+      jxf_MPI_Allreduce(&graph_size,&global_graph_size,1,JXF_MPI_INT,MPI_SUM,comm);
+
+
+      if (global_graph_size == 0)
+      {
+         break;
+      }
+
+     /*------------------------------------------------
+      * Pick an independent set of points with
+      * maximal measure.
+      *------------------------------------------------*/
+      
+      measure_max = 0.0;
+      for (ig = 0; ig < graph_size; ig ++)
+      {
+      	i = graph_array[ig];
+      	if (measure_array[i] > measure_max) 
+      	{
+      	   measure_max = measure_array[i];
+      	}
+      }
+                 
+      if (measure_type_rlx)
+      {
+         jxf_MPI_Allreduce(&measure_max, &measure_global, 1, JXF_MPI_REAL, MPI_MAX, comm); // Feb,24,2005
+      }
+      else
+      {
+         measure_global = measure_max; 
+      }
+         
+      measure_th = measure_threshold_rlx*measure_global;     
+
+      if (debug_flag == 1) wall_time1 = jxf_time_getWallclockSeconds();
+      
+      if (iter || !CF_init)
+      {
+         jxf_PAMGIndepSetRelax(S, S_ext, measure_array, graph_array, 
+                              graph_size, graph_array_offd, graph_offd_size,
+                              CF_marker, CF_marker_offd, number_syn_rlx, measure_th);			
+      }		
+      	
+      if (debug_flag == 1) inset_time = inset_time + jxf_time_getWallclockSeconds() - wall_time1;
+      
+      iter ++;
+      
+     /*------------------------------------------------
+      * Exchange boundary data for CF_marker
+      *------------------------------------------------*/
+
+      index = 0;
+      for (i = 0; i < num_sends; i ++)
+      {
+         start = jxf_ParCSRCommPkgSendMapStart(comm_pkg, i);
+         for (j = start; j < jxf_ParCSRCommPkgSendMapStart(comm_pkg, i+1); j ++)
+         {
+            int_buf_data[index++] = CF_marker[jxf_ParCSRCommPkgSendMapElmt(comm_pkg,j)];
+         }
+      }
+
+      if (num_procs > 1)
+      {
+         comm_handle = jxf_ParCSRCommHandleCreate(11, comm_pkg, int_buf_data, CF_marker_offd);
+         jxf_ParCSRCommHandleDestroy(comm_handle); 
+      }
+      
+      for (ig = 0; ig < graph_offd_size; ig ++)
+      {
+         i = graph_array_offd[ig];
+
+         if (CF_marker_offd[i] == F_PT)
+         {
+            /* take point out of the subgraph */
+            graph_offd_size --;
+            graph_array_offd[ig] = graph_array_offd[graph_offd_size];
+            graph_array_offd[graph_offd_size] = i;
+            ig --;
+         }
+      }
+      
+      if (debug_flag == 3)
+      {
+         wall_time = jxf_time_getWallclockSeconds() - wall_time;
+         jxf_printf("Proc = %d  iter %d  comm. and subgraph update = %f\n",my_id, iter, wall_time); 
+      }
+      
+     /*------------------------------------------------
+      * Set C_pts and apply heuristics.
+      *------------------------------------------------*/
+
+      for (i = num_variables; i < num_variables+num_cols_offd; i ++)
+      { 
+         measure_array[i] = 0;
+      }
+
+      if (debug_flag == 3) wall_time = jxf_time_getWallclockSeconds();
+      
+      for (ig = 0; ig < graph_size; ig ++)
+      {
+         i = graph_array[ig];
+
+        /*---------------------------------------------
+         * Heuristic: C-pts don't interpolate from
+         * neighbors that influence them.
+         *---------------------------------------------*/
+
+         if (CF_marker[i] > 0)
+         {  
+            /* set to be a C-pt */
+            CF_marker[i] = C_PT;
+
+            for (jS = S_diag_i[i]; jS < S_diag_i[i+1]; jS ++)
+            {
+               j = S_diag_j[jS];
+               if (j > -1)
+               {
+                  /* "remove" edge from S */
+                  S_diag_j[jS] = -S_diag_j[jS] - 1;
+             
+                  /* decrement measures of unmarked neighbors */
+                  if (!CF_marker[j])
+                  {
+                     measure_array[j] --;
+                  }
+               }
+            }
+            for (jS = S_offd_i[i]; jS < S_offd_i[i+1]; jS ++)
+            {
+               j = S_offd_j[jS];
+               if (j > -1)
+               {
+                  /* "remove" edge from S */
+                  S_offd_j[jS] = - S_offd_j[jS] - 1;
+               
+                  /* decrement measures of unmarked neighbors */
+                  if (!CF_marker_offd[j])
+                  {
+                     measure_array[j+num_variables] --;
+                  }
+               }
+            }
+         }
+	 else
+    	 {
+            /* marked dependencies */
+            for (jS = S_diag_i[i]; jS < S_diag_i[i+1]; jS ++)
+            {
+               j = S_diag_j[jS];
+               
+	       if (j < 0) 
+	       {
+	          j = - j - 1;
+	       }
+   
+               if (CF_marker[j] > 0)
+               {
+                  if (S_diag_j[jS] > -1)
+                  {
+                     /* "remove" edge from S */
+                     S_diag_j[jS] = -S_diag_j[jS] - 1;
+                  }
+   
+                  /* IMPORTANT: consider all dependencies */
+                  /* temporarily modify CF_marker */
+                  CF_marker[j] = COMMON_C_PT;
+               }
+            }
+            for (jS = S_offd_i[i]; jS < S_offd_i[i+1]; jS ++)
+            {
+               j = S_offd_j[jS];
+               
+	       if (j < 0) 
+	       {
+	          j = - j - 1;
+	       }
+   
+               if (CF_marker_offd[j] > 0)
+               {
+                  if (S_offd_j[jS] > -1)
+                  {
+                     /* "remove" edge from S */
+                     S_offd_j[jS] = -S_offd_j[jS] - 1;
+                  }
+   
+                  /* IMPORTANT: consider all dependencies */
+                  /* temporarily modify CF_marker */
+                  CF_marker_offd[j] = COMMON_C_PT;
+               }
+            }
+   
+            /* unmarked dependencies */
+            for (jS = S_diag_i[i]; jS < S_diag_i[i+1]; jS ++)
+            {
+               if (S_diag_j[jS] > -1)
+               {
+                  j = S_diag_j[jS];
+   	          break_var = 1;
+                  /* check for common C-pt */
+                  for (kS = S_diag_i[j]; kS < S_diag_i[j+1]; kS ++)
+                  {
+                     k = S_diag_j[kS];
+                     
+		     if (k < 0) 
+		     {
+		        k = - k - 1;
+		     }
+   
+                     /* IMPORTANT: consider all dependencies */
+                     if (CF_marker[k] == COMMON_C_PT)
+                     {
+                        /* "remove" edge from S and update measure*/
+                        S_diag_j[jS] = - S_diag_j[jS] - 1;
+                        measure_array[j] --;
+                        break_var = 0;
+                        break;
+                     }
+                  }
+   		  if (break_var)
+                  {
+                     for (kS = S_offd_i[j]; kS < S_offd_i[j+1]; kS ++)
+                     {
+                        k = S_offd_j[kS];
+                        
+		        if (k < 0) 
+		        {
+		           k = - k - 1;
+		        }
+   
+                        /* IMPORTANT: consider all dependencies */
+                        if ( CF_marker_offd[k] == COMMON_C_PT)
+                        {
+                           /* "remove" edge from S and update measure*/
+                           S_diag_j[jS] = - S_diag_j[jS] - 1;
+                           measure_array[j] --;
+                           break;
+                        }
+                     }
+                  }
+               }
+            }
+            
+            for (jS = S_offd_i[i]; jS < S_offd_i[i+1]; jS ++)
+            {
+               if (S_offd_j[jS] > -1)
+               {
+                  j = S_offd_j[jS];
+   
+                  /* check for common C-pt */
+                  for (kS = S_ext_i[j]; kS < S_ext_i[j+1]; kS ++)
+                  {
+                     k = S_ext_j[kS];
+   	             if (k >= 0)
+   		     {
+                        /* IMPORTANT: consider all dependencies */
+                        if (CF_marker[k] == COMMON_C_PT)
+                        {
+                           /* "remove" edge from S and update measure*/
+                           S_offd_j[jS] = - S_offd_j[jS] - 1;
+                           measure_array[j+num_variables] --;
+                           break;
+                        }
+                     }
+   		     else
+   		     {
+   		        kc = - k - 1;
+   		        if (kc > -1 && CF_marker_offd[kc] == COMMON_C_PT)
+   		        {
+                           /* "remove" edge from S and update measure*/
+                           S_offd_j[jS] = - S_offd_j[jS] - 1;
+                           measure_array[j+num_variables] --;
+                           break;
+   		        }
+   		     }
+                  }
+               }
+            }
+         }
+
+         /* reset CF_marker */
+	 for (jS = S_diag_i[i]; jS < S_diag_i[i+1]; jS ++)
+	 {
+            j = S_diag_j[jS];
+            
+	    if (j < 0) 
+	    {
+	       j = - j - 1;
+	    }
+
+            if (CF_marker[j] == COMMON_C_PT)
+            {
+               CF_marker[j] = C_PT;
+            }
+         }
+         
+         for (jS = S_offd_i[i]; jS < S_offd_i[i+1]; jS ++)
+         {
+            j = S_offd_j[jS];
+            
+	    if (j < 0) 
+	    {
+	       j = - j - 1;
+	    }
+
+            if (CF_marker_offd[j] == COMMON_C_PT)
+            {
+               CF_marker_offd[j] = C_PT;
+            }
+         }
+      }
+
+      if (debug_flag == 3)
+      {
+         wall_time = jxf_time_getWallclockSeconds() - wall_time;
+         jxf_printf("Proc = %d    CLJP phase = %f graph_size = %d nc_offd = %d\n",
+                 my_id, wall_time, graph_size, num_cols_offd); 
+      }      
+   }
+   
+   if (debug_flag == 1)
+   {
+      jxf_printf("Proc = %d   Inset_time = %f\n",my_id, inset_time);
+   }
+
+   /* Reset S_matrix */
+   for (i = 0; i < S_diag_i[num_variables]; i ++)
+   {
+      if (S_diag_j[i] < 0)
+      {
+         S_diag_j[i] = - S_diag_j[i] - 1;
+      }
+   }
+   for (i = 0; i < S_offd_i[num_variables]; i ++)
+   {
+      if (S_offd_j[i] < 0)
+      {
+         S_offd_j[i] = - S_offd_j[i] - 1;
+      }
+   }
+   
+  /*---------------------------------------------------
+   * Clean up and return
+   *---------------------------------------------------*/
+
+   jxf_TFree(measure_array);
+   jxf_TFree(graph_array);
+   if (num_cols_offd) 
+   {
+      jxf_TFree(graph_array_offd);
+   }
+   jxf_TFree(buf_data);
+   jxf_TFree(int_buf_data);
+   jxf_TFree(CF_marker_offd);
+   if (num_procs > 1) 
+   {
+      jxf_CSRMatrixDestroy(S_ext);
+   }
+
+   *CF_marker_ptr = CF_marker;
+
+   return (ierr);
+}

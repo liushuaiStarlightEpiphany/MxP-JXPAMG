@@ -1,0 +1,943 @@
+//========================================================================//
+//  JXFPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
+//  Institute of Applied Physics and Computational Mathematics            //
+//  School of Mathematics and Computational Science Xiangtan University   //
+//========================================================================//
+
+/*!
+ *  par_cycle.c
+ *  Date: 2011/09/03
+ */ 
+
+#include "jxf_pamg.h"
+#include "jxf_ilu.h"
+
+/*!
+ * \fn JXF_Int jxf_PAMGCycle
+ * \brief Cycle of PAMG.
+ * \date 2011/09/03
+ */
+
+JXF_Int
+jxf_hpPAMGCycle( void           *amg_vdata, 
+              jxf_ParVector  **F_array,
+              jxf_ParVector  **U_array)
+{
+   jxf_ParAMGData *amg_data = amg_vdata;
+   MPI_Comm       comm;
+
+   jxf_ParVector *Aux_U;
+   jxf_ParVector *Aux_F;
+   jxf_ParVector *Ttemp = NULL;
+   
+   JXF_Solver *smoother;
+ 
+   JXF_Real *num_coeffs;
+
+   /* Local variables  */ 
+   JXF_Int      *lev_counter;
+   JXF_Int       Solve_err_flag;
+   JXF_Int       i, j, k;
+   JXF_Int       level;
+   JXF_Int       cycle_param;
+   JXF_Int       coarse_grid;
+   JXF_Int       fine_grid;
+   JXF_Int       Not_Finished;
+   JXF_Int       num_sweep;
+   JXF_Int       relax_type;
+   JXF_Int       relax_points = 0;
+   JXF_Int       relax_local;
+   JXF_Int       old_version = 0;
+   JXF_Int       local_size = 0;
+   JXF_Real    alpha, beta;
+   JXF_Int     **relax_marker_ai = NULL;
+   JXF_Int     **relax_marker_ess = NULL;
+   JXF_Int       n, num_ai_th_step, num_ai_th, num_ess_th;
+   JXF_Real    ai_measure_th_min = 0.2;
+   JXF_Real    ai_measure_th_max = 2.01;
+//   JXF_Real    ai_factor = 0.5;
+//   JXF_Real    ai_measure_th, ai_measure_th_l, ai_measure_th_h;
+   JXF_Real    ai_measure_th_l, ai_measure_th_h;
+   JXF_Real    ai_measure;
+
+
+  /*----------------------------------------------------------------------
+   * Get the amg_data data
+   *---------------------------------------------------------------------*/
+   JXF_Int      wall_time_option = jxf_ParAMGDataWallTimeOption(amg_data);  /* newly added Yue Xiaoqiang 2015/09/30 */
+   JXF_Int      num_levels  = jxf_ParAMGDataNumLevels(amg_data);
+   JXF_Int      max_levels  = jxf_ParAMGDataMaxLevels(amg_data); 
+   JXF_Int      cycle_type  = jxf_ParAMGDataCycleType(amg_data);
+   JXF_Int      restri_type = jxf_ParAMGDataRestriction(amg_data);
+   JXF_Int      smooth_type = jxf_ParAMGDataSmoothType(amg_data);
+   JXF_Int      smooth_num_levels = jxf_ParAMGDataSmoothNumLevels(amg_data);
+   JXF_Real   wall_time_coarsest = 0.0;    /* newly added Yue Xiaoqiang 2015/09/30 */
+   JXF_Real   wall_time_prolong = 0.0;     /* newly added Yue Xiaoqiang 2015/09/30 */
+   JXF_Real   wall_time_restrict = 0.0;    /* newly added Yue Xiaoqiang 2015/09/30 */
+   JXF_Real   wall_time_relaxation = 0.0;  /* newly added Yue Xiaoqiang 2015/09/30 */
+   JXF_Real   tmp_wall_time = 0.0;         /* newly added Yue Xiaoqiang 2015/09/30 */
+
+   JXF_Int     *num_grid_sweeps   = jxf_ParAMGDataNumGridSweeps(amg_data);  
+   JXF_Int     *grid_relax_type   = jxf_ParAMGDataGridRelaxType(amg_data);
+   JXF_Int    **grid_relax_points = jxf_ParAMGDataGridRelaxPoints(amg_data);
+   JXF_Real  *relax_weight      = jxf_ParAMGDataRelaxWeight(amg_data);
+   JXF_Real  *omega             = jxf_ParAMGDataOmega(amg_data); 
+   JXF_Real   cycle_op_count    = jxf_ParAMGDataCycleOpCount(amg_data);
+   JXF_Real **AI_measure_array  = jxf_ParAMGDataAIMeasureArray(amg_data);
+   JXF_Int    **CF_marker_array   = jxf_ParAMGDataCFMarkerArray(amg_data);
+   JXF_Int      relax_order       = jxf_ParAMGDataRelaxOrder(amg_data);
+   JXF_Real  **l1_norms = jxf_ParAMGDataL1Norms(amg_data);
+
+   jxf_hpCSRMatrix  **A_array = jxf_hpAMGDataAArray(amg_data);
+   jxf_ParCSRMatrix  **P_array = jxf_ParAMGDataPArray(amg_data);
+   jxf_ParCSRMatrix  **R_array = jxf_ParAMGDataRArray(amg_data);
+   jxf_ParVector      *Vtemp   = jxf_ParAMGDataVtemp(amg_data);
+   jxf_ParVector      *Ztemp   = jxf_ParAMGDataZtemp(amg_data);
+
+   /* for ai-prior smoothing .*/
+   jxf_Vector               *local_vector_ai = NULL;
+   JXF_Real                  *local_data_ai = NULL;
+   jxf_Vector               *local_vector_ess = NULL;
+   JXF_Real                  *local_data_ess = NULL;
+   JXF_Real   relative       = 0.0;
+   JXF_Real   rhs_norm       = 0.0;
+   JXF_Real   resid_nrm      = 0.0;
+   JXF_Real   resid_nrm_init = 0.0;
+   JXF_Real   resid_nrm_0 = 0.0;
+   JXF_Real   relative_ai       = 0.0;
+   JXF_Real   rhs_norm_ai       = 0.0;
+   JXF_Real   resid_nrm_ai      = 0.0;
+   JXF_Real   resid_nrm_init_ai = 0.0;
+   JXF_Real   relative_ess       = 0.0;
+   JXF_Real   rhs_norm_ess       = 0.0;
+   JXF_Real   resid_nrm_ess      = 0.0;
+   JXF_Real   resid_nrm_init_ess = 0.0;
+ 
+   JXF_Int           *partitioning   = NULL;
+   jxf_ParVector  *Utemp    = NULL;
+   JXF_Real   *l1_norms_level = NULL;
+   JXF_Int           size;
+   JXF_Int           my_id;
+   JXF_Int           conv_criteria = 0;  /* relative residual Norm-2 */
+   JXF_Int           print_level = 0, print_level_ai = 0, print_level_ess = 0;
+   JXF_Real        tol = 1.0e-6;
+//   JXF_Real        convfac_threshold = 0.95;
+   JXF_Real        convfac_threshold_ai = 0.3;
+   JXF_Real        convfac_threshold_ess = 0.3;
+   JXF_Real        conv_factor, conv_factor_ai, conv_factor_ess;
+   JXF_Int           iter, iter_ai, iter_ess, iter_ai_tot, iter_ess_tot;
+   JXF_Int           ai_relax_type = jxf_ParAMGDataAIRelaxType(amg_data);
+
+   lev_counter = jxf_CTAlloc(JXF_Int, num_levels);
+    
+
+   /* Initialize */
+   Solve_err_flag = 0;
+   comm = jxf_hpCSRMatrixComm(A_array[0]);
+
+   if (grid_relax_points) 
+   {
+      old_version = 1;
+   }
+
+   num_coeffs  = jxf_CTAlloc(JXF_Real, num_levels);
+   num_coeffs[0] = (JXF_Real)jxf_hpCSRMatrixNumNonzeros(A_array[0]);
+
+   for (j = 1; j < num_levels; j ++)
+   {
+      num_coeffs[j] = (JXF_Real)jxf_hpCSRMatrixNumNonzeros(A_array[j]);
+   }
+
+
+  /*---------------------------------------------------------------------
+   *    Initialize cycling control counter
+   *
+   *     Cycling is controlled using a level counter: lev_counter[k]
+   *     
+   *     Each time relaxation is performed on level k, the
+   *     counter is decremented by 1. If the counter is then
+   *     negative, we go to the next finer level. If non-
+   *     negative, we go to the next coarser level. The
+   *     following actions control cycling:
+   *     
+   *     a. lev_counter[0] is initialized to 1.
+   *     b. lev_counter[k] is initialized to cycle_type for k>0.
+   *     
+   *     c. During cycling, when going down to level k, lev_counter[k]
+   *        is set to the max of (lev_counter[k],cycle_type)
+   *---------------------------------------------------------------------*/
+
+   Not_Finished = 1;
+
+   lev_counter[0] = 1;
+   for (k = 1; k < num_levels; ++ k) 
+   {
+      lev_counter[k] = cycle_type;
+   }
+
+   if (ai_relax_type == 1) { // only for AI-AMG Yue Xiaoqiang 2014/07/03
+
+      //relax_order = 0; // temporal setting by xu 2013/05/30.
+      //old_version = 0; // temporal setting by xu 2013/05/30.
+      
+      /* initialize arrays for AI-prior smoothing. */
+      relax_marker_ai = jxf_CTAlloc(JXF_Int*, num_levels);
+      relax_marker_ess = jxf_CTAlloc(JXF_Int*, num_levels);
+      for (k = 0; k < num_levels; k++) 
+      {
+         n = jxf_CSRMatrixNumRows(jxf_hpCSRMatrixDiag(A_array[k]));
+         relax_marker_ai[k] = jxf_CTAlloc(JXF_Int, n);
+         relax_marker_ess[k] = jxf_CTAlloc(JXF_Int, n);
+         for (i=0; i<n; i++) {
+             relax_marker_ai[k][i] = 0;
+             relax_marker_ess[k][i] = 1;
+         }
+      }
+      alpha = -1.0; beta = 1.0;
+
+   }
+
+   level = 0;
+   cycle_param = 1;
+
+   smoother = jxf_ParAMGDataSmoother(amg_data);
+
+   if (smooth_num_levels > 0)
+   {
+      if (smooth_type == 9 || smooth_type == 19)
+      {
+         Ttemp = jxf_ParVectorCreate(comm, jxf_ParVectorGlobalSize(Vtemp),
+                           jxf_ParVectorPartitioning(Vtemp));
+         jxf_ParVectorOwnsPartitioning(Ttemp) = 0;
+         jxf_ParVectorInitialize(Ttemp);
+      }
+   }
+
+  /*---------------------------------------------------------------------
+   * Main loop of cycling
+   *--------------------------------------------------------------------*/
+  
+   while (Not_Finished)
+   {
+
+      if (num_levels > 1) 
+      {
+         local_size = jxf_VectorSize(jxf_ParVectorLocalVector(F_array[level]));
+         jxf_VectorSize(jxf_ParVectorLocalVector(Vtemp)) = local_size;
+
+         num_sweep = num_grid_sweeps[cycle_param];
+         Aux_U = U_array[level];
+         Aux_F = F_array[level];
+
+         relax_type = grid_relax_type[cycle_param];
+
+         /* initialize Utemp. */
+         comm = jxf_hpCSRMatrixComm(A_array[level]);
+         jxf_MPI_Comm_rank(comm, &my_id);
+
+         partitioning = jxf_ParVectorPartitioning(Aux_F);
+         size = jxf_ParVectorGlobalSize(Aux_F);
+         Utemp = jxf_ParVectorCreate(comm, size, partitioning);
+         jxf_ParVectorSetPartitioningOwner(Utemp, 0);
+         jxf_ParVectorInitialize(Utemp);
+      }
+      else /* AB: 4/08: removed the max_levels > 1 check - should do this when max-levels = 1 also */
+      {
+         /* If no coarsening occurred, apply a simple smoother once */
+         Aux_U = U_array[level];
+         Aux_F = F_array[level];
+         num_sweep  = 1;
+         /* TK: Use the user relax type (instead of 0) to allow for setting a
+            convergent smoother (e.g. in the solution of singular problems). */
+         //relax_type = 0;
+         relax_type = jxf_ParAMGDataUserRelaxType(amg_data);
+         if (relax_type == -1) relax_type = 6;
+      }
+
+      if (l1_norms != NULL)
+         l1_norms_level = l1_norms[level];
+      else
+         l1_norms_level = NULL;
+
+      if (ai_relax_type == 0) { // not for AI-AMG Yue Xiaoqiang 2014/07/03
+
+         if (wall_time_option == 1) tmp_wall_time = jxf_time_getWallclockSeconds();
+
+        /*------------------------------------------------------------------
+         * Do the relaxation num_sweep times
+         *-----------------------------------------------------------------*/
+         for (j = 0; j < num_sweep; j ++)
+         {
+            if (num_levels == 1 && max_levels > 1)
+            {
+               relax_points = 0;
+               relax_local = 0;
+            }
+            else
+            {
+               if (old_version)
+               {
+                  relax_points = grid_relax_points[cycle_param][j];
+               }
+               relax_local = relax_order;
+            }
+
+           /*----------------------------------------------------
+            * VERY sloppy approximation to cycle complexity
+            *---------------------------------------------------*/
+
+            if (old_version && level < num_levels - 1)
+            {
+               switch (relax_points)
+               {
+                  case 1:
+                  cycle_op_count += num_coeffs[level+1];
+                  break;
+  
+                  case -1: 
+                  cycle_op_count += (num_coeffs[level]-num_coeffs[level+1]); 
+                  break;
+               }
+            }
+            else
+            {
+               cycle_op_count += num_coeffs[level]; 
+            }
+
+            if (smooth_num_levels > level && (smooth_type == 9 || smooth_type == 19))
+            {
+               jxf_VectorSize(jxf_ParVectorLocalVector(Utemp)) = local_size;
+               jxf_ParVectorCopy(Aux_F, Vtemp);
+               jxf_hpCSRMatrixMatvec(-1.0, A_array[level], U_array[level], 1.0, Vtemp);
+               JXF_EuclidSolve(smoother[level], (JXF_hpCSRMatrix) A_array[level],
+                                         (JXF_ParVector) Vtemp, (JXF_ParVector) Utemp);
+               jxf_ParVectorAxpy(relax_weight[level], Utemp, Aux_U);
+            }
+            else if (smooth_num_levels > level && (smooth_type == 5 || smooth_type == 15))
+            {
+               JXF_ILUSolve(smoother[level], (JXF_ParCSRMatrix)  jxf_hpCSRMatrixPar(A_array[level]), (JXF_ParVector) Aux_F, (JXF_ParVector) Aux_U);
+            }
+            else if (old_version)
+            {
+               Solve_err_flag = jxf_hpPAMGRelax( A_array[level], 
+                                              Aux_F,
+                                              CF_marker_array[level],
+                                              relax_type,
+                                              relax_points,
+                                              relax_weight[level],
+                                              omega[level],
+                                              l1_norms_level,
+                                              Aux_U,
+                                              Vtemp,
+                                              Ztemp );
+            }
+            else
+            {
+
+               Solve_err_flag = jxf_hpPAMGRelaxIF( A_array[level], 
+                                                Aux_F,
+                                                CF_marker_array[level],
+                                                relax_type,
+                                                relax_local,
+                                                cycle_param,
+                                                relax_weight[level],
+                                                omega[level],
+                                                l1_norms_level,
+                                                Aux_U,
+                                                Vtemp,
+                                                Ztemp );
+
+            }
+    
+            if (Solve_err_flag != 0) 
+            {
+               return(Solve_err_flag);
+            }
+
+         }
+
+         if (wall_time_option == 1)
+         {
+            if (relax_type == 9)
+            {
+               wall_time_coarsest += (jxf_time_getWallclockSeconds() - tmp_wall_time);
+            }
+            else
+            {
+               wall_time_relaxation += (jxf_time_getWallclockSeconds() - tmp_wall_time);
+            }
+         }
+      }
+      else if (ai_relax_type == 1) { // only for AI-AMG Yue Xiaoqiang 2014/07/03
+
+         //jxf_printf("level = %d, relax_type in amg_cycle = %d\n", level, relax_type);
+
+         iter = 0;
+         conv_factor = 0.0;
+
+         /* local rhs_norm */
+         jxf_ParVectorCopy(Aux_F, Vtemp);
+         rhs_norm = jxf_ParVectorNorm2(Vtemp);
+
+         /* compute initial local resid_nrm. */
+         jxf_ParVectorCopy(Aux_F, Vtemp);
+         alpha = -1.0; beta = 1.0;
+         jxf_hpCSRMatrixMatvec(alpha, A_array[level], Aux_U, beta, Vtemp);
+         resid_nrm = jxf_ParVectorNorm2(Vtemp);
+         resid_nrm_init = resid_nrm;
+         //jxf_printf("rhs_norm = %f\n", rhs_norm);
+         //jxf_printf("resid_nrm_init = %f\n", resid_nrm_init);
+         //jxf_printf("relax_type = %d\n", relax_type);
+         relative = 2*tol;
+
+        /*------------------------------------------------------------------
+         * Do the relaxation num_sweep times
+         *-----------------------------------------------------------------*/
+
+         if (relax_type >=90 ) {
+
+            relax_type = relax_type - 90;
+
+            n = jxf_CSRMatrixNumRows(jxf_hpCSRMatrixDiag(A_array[level]));
+
+            // following code need to be optimized.
+            //ai_measure_th = ai_measure_th_max;
+            ai_measure_th_l = ai_measure_th_min;
+            ai_measure_th_h = ai_measure_th_max;
+            num_ai_th = 0;
+            num_ess_th = n;
+
+            num_ai_th_step = 0;
+            for (i=0; i<n; i++) {
+               ai_measure = AI_measure_array[level][i];
+               if  ( ai_measure >= ai_measure_th_l && ai_measure <= ai_measure_th_h 
+                  //&& CF_marker_array[level][i] == 1
+                   ) {
+                   relax_marker_ai[level][i] = 1;
+                   relax_marker_ess[level][i] = 0;
+                   num_ai_th++;
+                   num_ai_th_step++;
+                   num_ess_th--;
+               }
+            }
+
+#if 1 
+            /* local rhs_norm */
+            jxf_ParVectorCopy(Aux_F, Vtemp);
+            jxf_ParVectorCopy(Aux_F, Utemp);
+
+            local_vector_ai = jxf_ParVectorLocalVector(Vtemp);
+            local_data_ai   = jxf_VectorData(local_vector_ai);
+            local_size   = jxf_VectorSize(local_vector_ai);
+
+            local_vector_ess = jxf_ParVectorLocalVector(Utemp);
+            local_data_ess   = jxf_VectorData(local_vector_ess);
+
+            if (local_size != n) jxf_printf("ERROR: local_size != n. \n");
+            for (i=0; i<local_size; i++) {
+                if (relax_marker_ai[level][i] == 0) {
+                   local_data_ai[i] = 0.0;
+                } else if (relax_marker_ess[level][i] == 0){
+                   local_data_ess[i] = 0.0;
+                } else {
+                   jxf_printf("ERROR: relax_marker_ai does not match relax_marker_ess.\n");
+                   exit(0);
+                }
+            }
+            rhs_norm_ai = jxf_ParVectorNorm2(Vtemp);
+            rhs_norm_ess = jxf_ParVectorNorm2(Utemp);
+
+#endif
+
+            iter_ai_tot = 0;
+            iter_ess_tot = 0;
+            //jxf_printf(" level = %d, num_points = %d, num_ai_points = %d, num_ess_pionts = %d \n",
+            //         level, n, num_ai_th, num_ess_th);
+            //for (j = 0; j < num_sweep; j ++)
+            while ( iter < num_sweep && relative >= tol)
+            //while ( iter < num_sweep && conv_factor <= convfac_threshold)
+            { 
+#if 1 
+               ++iter;
+               resid_nrm_0 = resid_nrm;
+               /* compute initial local resid_nrm: ai-parts. */
+               jxf_ParVectorCopy(Aux_F, Vtemp);
+               alpha = -1.0; beta = 1.0;
+               jxf_hpCSRMatrixMatvec(alpha, A_array[level], Aux_U, beta, Vtemp);
+
+               local_vector_ai = jxf_ParVectorLocalVector(Vtemp);
+               local_data_ai   = jxf_VectorData(local_vector_ai);
+               local_size   = jxf_VectorSize(local_vector_ai);
+
+               for (i=0; i<local_size; i++) {
+                   if (relax_marker_ai[level][i] == 0) {
+                      local_data_ai[i] = 0.0;
+                   }
+               }
+               resid_nrm_ai = jxf_ParVectorNorm2(Vtemp);
+               resid_nrm_init_ai = resid_nrm_ai;
+
+               if (rhs_norm_ai)
+               {
+                  relative_ai = resid_nrm_init_ai / rhs_norm_ai;
+               }
+               else
+               {
+                  relative_ai = resid_nrm_init_ai;
+               }
+               relative_ai = 2*tol;
+
+#endif 
+               /* AI-part smoothing. */
+               conv_factor_ai = 0.0;
+               iter_ai = 0;
+               if (print_level_ai) jxf_printf("Initial_ai    %e                %e\n", resid_nrm_init_ai, relative_ai);
+               //jxf_printf("relative_ai = %f, num_ai_th = %d, conv_factor_ai = %f \n",
+               //        relative_ai, num_ai_th, conv_factor_ai);
+               while ( iter_ai < 1  && relative_ai >= tol && num_ai_th>0 && conv_factor_ai <= convfac_threshold_ai)
+               //while ( iter_ai < 1 )
+               {
+                  //jxf_printf("ai-part smoothing...\n");
+                  if (num_levels == 1 && max_levels > 1)
+                  {
+                     relax_points = 0;
+                     relax_local = 0;
+                  }
+                  else
+                  {
+                     if (old_version)
+                     {
+                        relax_points = grid_relax_points[cycle_param][j];
+                     }
+                     relax_local = relax_order;
+                  }
+
+                  /*----------------------------------------------------
+                   * VERY sloppy approximation to cycle complexity
+                   *---------------------------------------------------*/
+
+                  if (old_version && level < num_levels - 1)
+                  {
+                     switch (relax_points)
+                     {
+                        case 1:
+                        cycle_op_count += (num_coeffs[level+1]*num_ai_th)/n; 
+                        break;
+
+                        case -1: 
+                        cycle_op_count += ((num_coeffs[level]-num_coeffs[level+1])*num_ai_th)/n;
+                        break;
+                     }
+                  }
+                  else
+                  {
+                     cycle_op_count += (num_coeffs[level]*num_ai_th)/n; 
+                  }
+
+                  //relax_local = 0; // temporal setting by xu 2013/05/30.
+                  if (old_version)
+                  {
+                     Solve_err_flag = jxf_hpPAMGRelaxAI( A_array[level], 
+                                                      Aux_F,
+                                                      CF_marker_array[level],
+                                                      relax_marker_ai[level],
+                                                      relax_type,
+                                                      relax_points,
+                                                      relax_weight[level],
+                                                      omega[level],
+                                                      Aux_U,
+                                                      Vtemp );
+                  }
+                  else
+                  {
+                     Solve_err_flag = jxf_hpPAMGRelaxIFAI( A_array[level], 
+                                                        Aux_F,
+                                                        CF_marker_array[level],
+                                                        relax_marker_ai[level],
+                                                        relax_type,
+                                                        relax_local,
+                                                        cycle_param,
+                                                        relax_weight[level],
+                                                        omega[level],
+                                                        Aux_U,
+                                                        Vtemp );
+                  }
+
+                  if (Solve_err_flag != 0) 
+                  {
+                     return(Solve_err_flag);
+                  }
+
+                  ++ iter_ai;
+
+                  jxf_hp_check_convergence( relax_marker_ai[level], A_array[level], Aux_F,
+                                        alpha, beta, iter_ai, Aux_U, Vtemp, NULL,
+                                        my_id, print_level_ai, conv_criteria, rhs_norm_ai, resid_nrm_init_ai,
+                                        &resid_nrm_ai, &relative_ai, &conv_factor_ai);
+
+                  //ai_measure_th = ai_measure_th_l;
+                  //ai_measure_th_h = ai_measure_th_l;
+                  //ai_factor = 0.1;
+               } // end for j: AI-parts.
+      
+#if 1 
+               /* compute initial local resid_nrm: ess-part. */
+               jxf_ParVectorCopy(Aux_F, Vtemp);
+               alpha = -1.0; beta = 1.0;
+               jxf_hpCSRMatrixMatvec(alpha, A_array[level], Aux_U, beta, Vtemp);
+
+               local_vector_ess = jxf_ParVectorLocalVector(Vtemp);
+               local_data_ess   = jxf_VectorData(local_vector_ess);
+               local_size   = jxf_VectorSize(local_vector_ess);
+
+               for (i=0; i<local_size; i++) {
+                   if (relax_marker_ess[level][i] == 0) {
+                      local_data_ess[i] = 0.0;
+                   }
+               }
+               resid_nrm_ess = jxf_ParVectorNorm2(Vtemp);
+               resid_nrm_init_ess = resid_nrm_ess;
+
+               if (rhs_norm_ess)
+               {
+                  relative_ess = resid_nrm_init_ess / rhs_norm_ess;
+               }
+               else
+               {
+                  relative_ess = resid_nrm_init_ess;
+               }
+               relative_ess = 2*tol;
+
+#endif 
+               /* ESS-part smoothing. */
+               conv_factor_ess = 0.0;
+               iter_ess = 0;
+               if (print_level_ess) jxf_printf("Initial_ess    %e                %e\n",
+                resid_nrm_init_ess, relative_ess);
+               while ( iter_ess < 1 && relative_ess >= tol &&
+                       num_ess_th>0 && conv_factor_ess <= convfac_threshold_ess)
+               //while ( iter_ess < 6)
+               {
+                  if (num_levels == 1 && max_levels > 1)
+                  {
+                     relax_points = 0;
+                     relax_local = 0;
+                  }
+                  else
+                  {
+                     if (old_version)
+                     {
+                        relax_points = grid_relax_points[cycle_param][j];
+                     }
+                     relax_local = relax_order;
+                  }
+
+                 /*----------------------------------------------------
+                  * VERY sloppy approximation to cycle complexity
+                  *---------------------------------------------------*/
+
+                  if (old_version && level < num_levels - 1)
+                  {
+                     switch (relax_points)
+                     {
+                        case 1:
+                        cycle_op_count += (num_coeffs[level+1]*num_ess_th)/n;
+                        break;
+  
+                        case -1: 
+                        cycle_op_count += ((num_coeffs[level]-num_coeffs[level+1])*num_ess_th)/n;
+                        break;
+                     }
+                  }
+                  else
+                  {
+                     cycle_op_count += (num_coeffs[level]*num_ess_th)/n;
+                  }
+
+                  //relax_local = 0; // temporal setting by xu 2013/05/30.
+                  if (old_version)
+                  {
+                     Solve_err_flag = jxf_hpPAMGRelaxAI( A_array[level], 
+                                                      Aux_F,
+                                                      CF_marker_array[level],
+                                                      relax_marker_ess[level],
+                                                      relax_type,
+                                                      relax_points,
+                                                      relax_weight[level],
+                                                      omega[level],
+                                                      Aux_U,
+                                                      Vtemp );
+                  }
+                  else
+                  {
+                     Solve_err_flag = jxf_hpPAMGRelaxIFAI( A_array[level], 
+                                                        Aux_F,
+                                                        CF_marker_array[level],
+                                                        relax_marker_ess[level],
+                                                        relax_type,
+                                                        relax_local,
+                                                        cycle_param,
+                                                        relax_weight[level],
+                                                        omega[level],
+                                                        Aux_U,
+                                                        Vtemp );
+                  }
+  
+                  if (Solve_err_flag != 0) 
+                  {
+                     return(Solve_err_flag);
+                  }
+                  ++ iter_ess;
+
+                  jxf_hp_check_convergence( relax_marker_ess[level], A_array[level], Aux_F,
+                                        alpha,beta, iter_ess, Aux_U, Vtemp,NULL, 
+                                        my_id, print_level_ess, conv_criteria, rhs_norm_ess, resid_nrm_init_ess,
+                                        &resid_nrm_ess, &relative_ess, &conv_factor_ess);
+
+               } //end for j: ESS-parts.
+
+               iter_ai_tot = iter_ai_tot + iter_ai;
+               iter_ess_tot = iter_ess_tot + iter_ess;
+               //jxf_printf("iter = %d, iter_ai = %d, iter_ess = %d\n", iter, iter_ai, iter_ess);
+               jxf_hp_check_convergence( NULL, A_array[level], Aux_F, alpha, beta, iter, Aux_U, Vtemp, NULL, 
+                                     my_id, print_level, conv_criteria, rhs_norm, resid_nrm_init,
+                                     &resid_nrm_0, &relative, &conv_factor);
+               resid_nrm = resid_nrm_0;
+
+            } // end for j.
+
+            //jxf_printf("iter_ai_tot = %d, iter_ess_tot = %d\n", iter_ai_tot, iter_ess_tot);
+         } // end for ai-prior relax.
+         /* for general smoothing strategy. */
+         else 
+         { 
+
+            //for (j = 0; j < num_sweep; j ++)
+            //while ( iter < num_sweep && conv_factor <= convfac_threshold)
+            while ( iter < num_sweep && relative >= tol)
+            {
+               ++iter;
+               resid_nrm_0 = resid_nrm;
+               if (num_levels == 1 && max_levels > 1)
+               {
+                  relax_points = 0;
+                  relax_local = 0;
+               }
+               else
+               {
+                  if (old_version)
+                  {
+                     relax_points = grid_relax_points[cycle_param][j];
+                  }
+                  relax_local = relax_order;
+               }
+
+              /*----------------------------------------------------
+               * VERY sloppy approximation to cycle complexity
+               *---------------------------------------------------*/
+
+               if (old_version && level < num_levels - 1)
+               {
+                  switch (relax_points)
+                  {
+                     case 1:
+                     cycle_op_count += num_coeffs[level+1];
+                     break;
+
+                     case -1: 
+                     cycle_op_count += (num_coeffs[level]-num_coeffs[level+1]); 
+                     break;
+                  }
+               }
+               else
+               {
+                  cycle_op_count += num_coeffs[level]; 
+               }
+
+               //relax_local = 0; // temporal setting by xu 2013/05/30.
+               //jxf_printf("old_version = %d, cycle_param = %d, relax_type = %d\n",
+               //        old_version, cycle_param, relax_type);
+               /* Choose Smoother */
+               if (smooth_num_levels > level && (smooth_type == 9 || smooth_type == 19))
+               {
+                  jxf_VectorSize(jxf_ParVectorLocalVector(Utemp)) = local_size;
+                  jxf_ParVectorCopy(Aux_F, Vtemp);
+                  jxf_hpCSRMatrixMatvec(-1.0, A_array[level], U_array[level], 1.0, Vtemp);
+                  JXF_EuclidSolve(smoother[level], (JXF_hpCSRMatrix) A_array[level],
+                                            (JXF_ParVector) Vtemp, (JXF_ParVector) Utemp);
+                  jxf_ParVectorAxpy(relax_weight[level], Utemp, Aux_U);
+               }
+               else if (old_version)
+               {
+                  Solve_err_flag = jxf_hpPAMGRelax( A_array[level], 
+                                                 Aux_F,
+                                                 CF_marker_array[level],
+                                                 relax_type,
+                                                 relax_points,
+                                                 relax_weight[level],
+                                                 omega[level],
+                                                 l1_norms_level,
+                                                 Aux_U,
+                                                 Vtemp,
+                                                 Ztemp );
+               }
+               else
+               {
+                  Solve_err_flag = jxf_hpPAMGRelaxIF( A_array[level], 
+                                                   Aux_F,
+                                                   CF_marker_array[level],
+                                                   relax_type,
+                                                   relax_local,
+                                                   cycle_param,
+                                                   relax_weight[level],
+                                                   omega[level],
+                                                 l1_norms_level,
+                                                 Aux_U,
+                                                 Vtemp,
+                                                 Ztemp );
+               }
+
+               if (Solve_err_flag != 0) 
+               {
+                  return(Solve_err_flag);
+               }
+               jxf_hp_check_convergence( NULL, A_array[level], Aux_F, alpha, beta, iter, Aux_U, Vtemp, NULL, 
+                                     my_id, print_level, conv_criteria, rhs_norm, resid_nrm_init,
+                                     &resid_nrm_0, &relative, &conv_factor);
+               resid_nrm = resid_nrm_0;
+
+            } //end for j
+
+         }
+      }
+      //jxf_printf("iters of smoother = %d\n", iter);
+
+     /*--------------------------------------------------------------------------
+      * Decrement the control counter and determine which grid to visit next
+      *------------------------------------------------------------------------*/
+
+      -- lev_counter[level];
+       
+      if (lev_counter[level] >= 0 && level != num_levels-1)
+      {                 
+        
+        /*---------------------------------------------------------------
+         * Visit coarser level next.  
+         * Compute residual using jxf_ParCSRMatrixMatvec.
+         * Perform restriction using jxf_ParCSRMatrixMatvecT.
+         * Reset counters and cycling parameters for coarse level
+         *--------------------------------------------------------------*/
+         fine_grid = level;
+         coarse_grid = level + 1;
+
+         if (wall_time_option == 1) tmp_wall_time = jxf_time_getWallclockSeconds();
+
+         jxf_ParVectorSetConstantValues(U_array[coarse_grid], 0.0); 
+         
+         jxf_ParVectorCopy(F_array[fine_grid], Vtemp);
+         
+         alpha = -1.0; beta = 1.0;
+
+         jxf_hpCSRMatrixMatvec(alpha, A_array[fine_grid], U_array[fine_grid], beta, Vtemp);
+
+         alpha = 1.0; beta = 0.0;
+         if (restri_type)
+         {
+            /* No transpose for R */
+            jxf_ParCSRMatrixMatvec(alpha, R_array[fine_grid], Vtemp, beta, F_array[coarse_grid]);
+         }
+         else
+         {
+            jxf_ParCSRMatrixMatvecT(alpha, R_array[fine_grid], Vtemp, beta, F_array[coarse_grid]);
+         }
+
+         if (wall_time_option == 1)
+         {
+            wall_time_restrict += (jxf_time_getWallclockSeconds() - tmp_wall_time);
+         }
+
+
+         ++ level;
+
+         lev_counter[level] = jxf_max(lev_counter[level], cycle_type);
+         
+         cycle_param = 1;
+         
+         if (level == num_levels-1) 
+         {
+            cycle_param = 3;
+         }
+      }
+
+      else if (level != 0)
+      {
+         
+        /*-------------------------------------------------------------------
+         * Visit finer level next.
+         * Interpolate and add correction using jxf_ParCSRMatrixMatvec.
+         * Reset counters and cycling parameters for finer level.
+         *------------------------------------------------------------------*/
+         fine_grid = level - 1;
+         coarse_grid = level;
+         
+         if (wall_time_option == 1) tmp_wall_time = jxf_time_getWallclockSeconds();
+
+         alpha = 1.0; beta = 1.0;
+         jxf_ParCSRMatrixMatvec(alpha, P_array[fine_grid], U_array[coarse_grid], beta, U_array[fine_grid]);
+
+         if (wall_time_option == 1)
+         {
+            wall_time_prolong += (jxf_time_getWallclockSeconds() - tmp_wall_time);
+         }
+
+         
+
+         -- level;
+
+         cycle_param = 2;
+      }
+      else
+      {
+         Not_Finished = 0;
+      }
+
+      jxf_ParVectorDestroy(Utemp);
+
+   }
+
+   jxf_ParAMGDataCycleOpCount(amg_data) = cycle_op_count;
+
+   if (ai_relax_type == 1) { // only for AI-AMG Yue Xiaoqiang 2014/07/03
+
+      for (k = 0; k < num_levels; k++) 
+      {
+         jxf_TFree(relax_marker_ai[k]);
+         jxf_TFree(relax_marker_ess[k]);
+      }
+      jxf_TFree(relax_marker_ai);
+      jxf_TFree(relax_marker_ess);
+
+   }
+
+   jxf_TFree(lev_counter);
+   jxf_TFree(num_coeffs);
+   
+   if (smooth_num_levels > 0)
+   {
+     if (smooth_type == 9 || smooth_type == 19)
+     {
+       jxf_ParVectorDestroy(Ttemp);
+     }
+   }
+
+   if (wall_time_option == 1)
+   {
+      jxf_MPI_Comm_rank(jxf_hpCSRMatrixComm(A_array[0]), &my_id);
+      jxf_printf("\n\nProc = %d, Relaxation except Coarsest Level Time = %f\n", my_id, wall_time_relaxation);
+      jxf_printf("Proc = %d, Relaxation on Coarsest Level Time = %f\n", my_id, wall_time_coarsest);
+      jxf_printf("Proc = %d, Prolongation and Correction Time = %f\n", my_id, wall_time_prolong);
+      jxf_printf("Proc = %d, Residual and Restriction Time = %f\n\n", my_id, wall_time_restrict);
+   }
+
+   return(Solve_err_flag);
+}

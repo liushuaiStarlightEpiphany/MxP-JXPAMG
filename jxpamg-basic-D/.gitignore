@@ -1,0 +1,12 @@
+.vscode/*
+
+*.o
+*.a
+
+lib/*
+
+example/solver_strong
+example/solver_asetup
+example/solver_blockprec
+example/solver_strong_ij
+example/solver_weak

@@ -1,0 +1,1708 @@
+//========================================================================//
+//  JXPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
+//  Institute of Applied Physics and Computational Mathematics            //
+//  School of Mathematics and Computational Science Xiangtan University   //
+//========================================================================//
+
+/*!
+ * solver_laplace.c -- This is an example demonstrating how to solve a sparse
+ * linear system arising from discretizations of Diffusion Operator
+ * by calling JXPAMG solver and the JXPAMG-based Krylov iterative methods.
+ *
+ * One of the following solvers can be used by
+ * assigning parameter 'solver_id'
+ *  solver_id = 0:  PAMG
+ *  solver_id = 11: CG
+ *  solver_id = 12: PAMG-CG
+ *  solver_id = 13: DS-CG
+ *  solver_id = 14: Euclid-CG
+ *  solver_id = 21: GMRES
+ *  solver_id = 22: PAMG-GMRES
+ *  solver_id = 23: DS-GMRES
+ *  solver_id = 24: Euclid-GMRES
+ *  solver_id = 31: BiCGSTAB
+ *  solver_id = 32: PAMG-BiCGSTAB
+ *  solver_id = 33: DS-BiCGSTAB
+ *  solver_id = 34: Euclid-BiCGSTAB
+ *
+ * Created by Yue Xiaoqiang 2012/09/20
+ *
+ *  Xiangtan University
+ *  yuexq1111@163.com
+ *
+ */
+
+#include "jx_pamg.h"
+#include "jx_diagscale.h"
+#include "jx_euclid.h"
+#include "jx_krylov.h"
+
+JX_Int
+jx_ParVectorSetRandomValues( jx_ParVector *v, JX_Int seed );
+JX_Int
+jx_SeqVectorSetRandomValues( jx_Vector *x, JX_Int seed );
+jx_ParCSRMatrix *
+jx_GenerateParLaplacian( MPI_Comm comm,
+                         JX_Int nx,
+                         JX_Int ny,
+                         JX_Int nz,
+                         JX_Int P,
+                         JX_Int Q,
+                         JX_Int R,
+                         JX_Int p,
+                         JX_Int q,
+                         JX_Int r,
+                         JX_Real *value );
+jx_ParCSRMatrix *
+jx_GenerateParLaplacian2d9pt( MPI_Comm comm,
+                              JX_Int nx,
+                              JX_Int ny,
+                              JX_Int P,
+                              JX_Int Q,
+                              JX_Int p,
+                              JX_Int q,
+                              JX_Real *value );
+jx_ParCSRMatrix *
+jx_GenerateParLaplacian3d27pt( MPI_Comm comm,
+                               JX_Int nx,
+                               JX_Int ny,
+                               JX_Int nz,
+                               JX_Int P,
+                               JX_Int Q,
+                               JX_Int R,
+                               JX_Int p,
+                               JX_Int q,
+                               JX_Int r,
+                               JX_Real *value );
+jx_ParCSRMatrix *
+jx_GenerateParConvecDiff( MPI_Comm comm,
+                          JX_Int nx,
+                          JX_Int ny,
+                          JX_Int nz,
+                          JX_Int P,
+                          JX_Int Q,
+                          JX_Int R,
+                          JX_Int p,
+                          JX_Int q,
+                          JX_Int r,
+                          JX_Real  *value );
+void
+jx_BuildParLaplacianMat( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr );
+void
+jx_BuildParLaplacianMat2d9pt( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr );
+void
+jx_BuildParLaplacianMat3d27pt( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr );
+void
+jx_BuildParConvecDiff( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr );
+void
+jx_BuildParLaplacianRhs( JX_Int argc, char *argv[], jx_hpCSRMatrix *A, jx_ParVector **b_ptr );
+
+int
+main( int argc, char *argv[] )
+{
+   MPI_Comm     comm = MPI_COMM_WORLD;
+   JX_Int       myid, nprocs;
+#if JX_USING_OPENMP || defined (JX_USING_PGCC_SMP)
+   JX_Int       nthreads;
+#endif
+   
+   JX_Int arg_index   = 0;
+   JX_Int print_usage = 0;
+   JX_Int build_matrix_type = 0; /* Yue Xiaoqiang 2012/10/16 */
+   
+   JX_Real starttime, endtime;
+   JX_Real starttimeT, endtimeT;
+   
+   // jx_ParCSRMatrix *par_matrix = NULL;
+   jx_hpCSRMatrix *hp_matrix = NULL;
+   jx_ParVector   *par_rhs   = NULL;
+   jx_ParVector   *par_sol   = NULL;
+   
+   JX_Int *partitioning = NULL;
+   /* DiagScale Precond */
+   JX_Solver ds_solver;
+   
+   /* Euclid solver */
+   JX_Solver euclid_solver;
+   JX_Int euclid_level;
+   JX_Int euclid_bj;
+   
+   /* JXPAMG solver */
+   JX_Solver amg_solver;
+   JX_Int max_levels;
+   JX_Int cycle_type;
+   JX_Int relax_type;
+   JX_Int measure_type;
+   JX_Int rap2;
+   JX_Int keepTranspose;
+   JX_Int coarsen_type;
+   JX_Int interp_type;
+   JX_Int P_max_elmts;
+   JX_Int agg_num_levels;
+   JX_Int ai_relax_type;
+   JX_Int ai_measure_type;
+   JX_Int coarsestsolverid;
+   JX_Int conv_criteria;
+   JX_Int coarse_threshold;
+   JX_Int amg_print_level;
+   JX_Real strong_threshold;
+   JX_Real max_row_sum;
+   JX_Real relax_wt;
+   JX_Real outer_wt;
+   JX_Real coarse_ratio;
+   
+   /* iterative method */
+   JX_Solver solver;
+   JX_Real tol;
+   JX_Int max_iter;
+   JX_Int k_dim; 
+   JX_Int is_check_restarted; /* Zhou Zhiyang 2011/11/08 */
+   JX_Int twonorm;
+   JX_Int solver_id;
+   JX_Int print_level;
+   JX_Int keepsol;
+   JX_Int new_mvcpu_flag;
+   
+   /* other variables */
+   JX_Int glosize;
+   JX_Int initguess = 0;
+   JX_Int num_iterations;
+   JX_Real final_res_norm;
+   JX_Real norm;
+   JX_Real mv_time_min = 0.0;
+   JX_Real mv_time_max = 0.0;
+   JX_Real mv_time_avg = 0.0;
+   
+   //----------------------------------------------------------------
+   // 启动 MPI
+   //----------------------------------------------------------------
+   jx_MPI_Init(&argc, &argv);
+   jx_MPI_Comm_rank(comm, &myid);
+   jx_MPI_Comm_size(comm, &nprocs);
+   #ifdef USING_HWLOC
+   jx_hpCreateHardwareInfo(comm);
+   #endif
+   
+   //----------------------------------------------------------------
+   // 参数设置
+   //----------------------------------------------------------------
+   max_levels       = 25;       /* 最大网格层数 */
+   cycle_type       = 1;        /* Cycle 类型  1: V_Cycle; 2：W_Cycle */
+   relax_type       = 3;        /* Relax 类型  3: hGS; 6：hSGS */
+   measure_type     = 0;        /* 影响值的计算方式 0：局部；1：全局 */
+   rap2             = 0;        /* RAP计算方式  0：RAP；1：先算Q=AP，再算RQ */
+   keepTranspose    = 0;        /* 存放限制算子  0：no；1：yes */
+   coarsen_type     = 6;        /* 粗化策略 */
+   interp_type      = 0;        /* 插值策略 */
+   P_max_elmts      = 0;        /* 插值算子每行最大非零元个数 */
+   agg_num_levels   = 0;        /* Aggressive粗化的层数 */
+   ai_measure_type  = 0;        /* AI-策略  0: no; 1: yes, 注意调整AI-粗化和AI-磨光 */
+   ai_relax_type    = 0;        /* AI-磨光  0: no; 1: yes */
+   amg_print_level  = 0;        /* work only when AMG as preconditioner */
+   strong_threshold = 0.25;     /* 强弱连通参数, 0.25 for 2D, 0.5 for 3D is recommended */
+   max_row_sum      = 0.9;      /* 行和参数 */
+   relax_wt         = 1.0;
+   outer_wt         = 1.0;
+   
+   coarse_threshold = 9;        /* 最粗网格层上网格节点个数的最大值 */
+   coarse_ratio     = 0.75;     /* 相邻两个网格层的粗点个数超过细点个数的 coarse_ratio, 则换成 CLJP 粗化 */
+   coarsestsolverid = 9;        /* 最粗网格层解法器 */
+   conv_criteria    = 0;        /* 收敛准则类型 */
+   
+   euclid_level     = 0;        /* level of fill-in */
+   euclid_bj        = 0;        /* Select PILU (0) or Block Jacobi ILU (1) */
+   
+   tol                = 1.0e-7;  /* 控制精度 */
+   max_iter           = 200;     /* 迭代法最大迭代次数 */
+   k_dim              = 100;     /* 回头数 */
+   is_check_restarted = 0;       /* Zhou Zhiyang 2011/11/08 */
+   twonorm            = 0;       /* PCG 法中的范数控制类型，0: B 范数; 1: l2 范数 */
+   print_level        = 3;       /* 0: 关闭；1：Setup参数；2：Solve参数；3：Setup+Solve参数 */
+   keepsol            = 0;       /* 是否保存解向量 */
+   new_mvcpu_flag     = 0;       /* 是否记录并行矩阵向量乘的CPU时间，0：不记录；1：记录 */
+   solver_id          = 0;
+#if JX_USING_OPENMP || defined (JX_USING_PGCC_SMP)
+   nthreads           = 1;       /* 线程数 Yue Xiaoqiang 2012/10/12 */
+#endif
+   
+   //----------------------------------------------------------------
+   // 命令行修改参数
+   //----------------------------------------------------------------
+   while (arg_index < argc)
+   {
+      if (strcmp(argv[arg_index], "-sid") == 0)
+      {
+         arg_index ++;
+         solver_id = atoi(argv[arg_index++]);
+      }
+      else if ( strcmp(argv[arg_index], "-rap2") == 0 )
+      {
+         arg_index ++;
+         rap2 = 1;
+      }
+      else if ( strcmp(argv[arg_index], "-kt") == 0 )
+      {
+         arg_index ++;
+         keepTranspose = 1;
+      }
+      else if ( strcmp(argv[arg_index], "-mvcpu") == 0 )
+      {
+         arg_index ++;
+         new_mvcpu_flag = 1;
+      }
+      else if ( strcmp(argv[arg_index], "-tnrm") == 0 )
+      {
+         arg_index ++;
+         twonorm = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-kdim") == 0)
+      {
+         arg_index ++;
+         k_dim = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-euc_lvl") == 0)
+      {
+         arg_index ++;
+         euclid_level = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-euc_bj") == 0)
+      {
+         arg_index ++;
+         euclid_bj = atoi(argv[arg_index++]);
+      }
+#if JX_USING_OPENMP || defined (JX_USING_PGCC_SMP)
+      else if (strcmp(argv[arg_index], "-nts") == 0)
+      {
+         arg_index ++;
+         nthreads = atoi(argv[arg_index++]);
+      }
+#endif
+      else if (strcmp(argv[arg_index], "-Pmx") == 0)
+      {
+         arg_index ++;
+         P_max_elmts = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-agg_nl") == 0)
+      {
+         arg_index ++;
+         agg_num_levels = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-9pt") == 0)
+      {
+         arg_index ++;
+         build_matrix_type = 1;
+      }
+      else if (strcmp(argv[arg_index], "-27pt") == 0)
+      {
+         arg_index ++;
+         build_matrix_type = 2;
+      }
+      else if (strcmp(argv[arg_index], "-ct") == 0)
+      {
+         arg_index ++;
+         coarsen_type = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-ipt") == 0)
+      {
+         arg_index ++;
+         interp_type = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-mxct") == 0)
+      {
+         arg_index ++;
+         coarse_threshold = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-str") == 0)
+      {
+         arg_index ++;
+         strong_threshold = atof(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-mxrs") == 0)
+      {
+         arg_index ++;
+         max_row_sum = atof(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-rlx") == 0)
+      {
+         arg_index ++;
+         relax_type = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-ai_rlx") == 0)
+      {
+         arg_index ++;
+         ai_relax_type = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-ai_mt") == 0)
+      {
+         arg_index ++;
+         ai_measure_type = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-amg_ptlv") == 0)
+      {
+         arg_index ++;
+         amg_print_level = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-ptlv") == 0)
+      {
+         arg_index ++;
+         print_level = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-help") == 0)
+      {
+         print_usage = 1;
+         break;
+      }
+      else
+      {
+         arg_index ++;
+      }
+   }
+   if (print_usage)
+   {
+      jx_printf("\n");
+      jx_printf("  Usage: %s [<options>]\n", argv[0]);
+      jx_printf("\n");
+      jx_printf("  -n <nx> <ny> <nz> : total problem size[10 10 10 being default]\n");
+      jx_printf("  -P <Px> <Py> <Pz> : processor topology[1 np 1 being default]\n");
+      jx_printf("  -c <cx> <cy> <cz> : diffusion coefficients[1.0 1.0 1.0 being default]\n");
+      jx_printf("     diffusion Opts : -cx Dxx - cy Dyy - cz Dzz\n");
+      jx_printf("  -one              : rhs is vector with unit components[default]\n");
+      jx_printf("  -rdm              : rhs is random vector and unit 2-norm\n");
+      jx_printf("  -sid  <val>       : solver id\n");
+      jx_printf("  -rap2             : 2nd implementation of RAP\n");
+      jx_printf("  -kt               : keep transpose\n");
+      jx_printf("  -mvcpu            : record CPU time of Matvec\n");
+      jx_printf("  -tnrm <val>       : two_norm in PCG\n");
+      jx_printf("  -kdim <val>       : krylov dimension\n");
+      jx_printf("  -euc_lvl <val>    : level of fill-in for Euclid\n");
+      jx_printf("  -euc_bj <val>     : PILU or Block Jacobi ILU\n");
+      jx_printf("  -nts <val>        : threads number\n");
+      jx_printf("  -Pmx <val>        : maximal number of elements per row for interpolation\n");
+      jx_printf("  -agg_nl <val>     : num_levels for aggressive coarsening\n");
+      jx_printf("  -9pt              : build 9pt 2D laplacian problem\n");
+      jx_printf("  -27pt             : build 27pt 3D laplacian problem\n");
+      jx_printf("  -ct <val>         : coarsening type\n");
+      jx_printf("  -ipt <val>        : interpolation type\n");
+      jx_printf("  -mxct <val>       : max. size on coarsest grid\n");
+      jx_printf("  -str <val>        : AMG strength threshold\n");
+      jx_printf("  -mxrs <val>       : maximum row sum threshold for dependency weakening\n");
+      jx_printf("  -rlx <val>        : relaxation type\n");
+      jx_printf("  -ai_rlx <val>     : AI relaxation type\n");
+      jx_printf("  -ai_mt  <val>     : AI measure type\n");
+      jx_printf("  -amg_ptlv <val>   : print_level of AMG when AMG as preconditioner\n");
+      jx_printf("  -ptlv <val>       : print_level\n");
+      jx_printf("  -help             : using help message\n\n");
+      exit(1);
+   }
+   
+   //----------------------------------------------------------------
+   // 提供线性系统文件
+   //----------------------------------------------------------------
+   if (myid == 0)
+   {
+      jx_printf("\n\n+++++++++++++++++++++");
+#if JX_USING_BIG_INT
+      jx_printf(" Using BIG_INT,");
+#endif
+#if JX_USING_BIG_DOUBLE
+      jx_printf(" BIG_DOUBLE,");
+#endif
+#if JX_USING_OPENMP || defined (JX_USING_PGCC_SMP)
+      jx_printf(" With OpenMP using %d threads,", nthreads);
+#endif
+      jx_printf(" MPI using %d processors +++++++++++++++++++++\n\n", nprocs);
+   }
+   
+   //----------------------------------------------------------------
+   // 设定线程数
+   //----------------------------------------------------------------
+#if JX_USING_OPENMP || defined (JX_USING_PGCC_SMP)
+   omp_set_num_threads(nthreads);
+#endif
+   
+   //----------------------------------------------------------------
+   // 利用矩阵文件创建并行矩阵和并行右端以及并行初始迭代向量(零向量或随机向量)
+   //----------------------------------------------------------------
+   starttime = jx_MPI_Wtime();
+   if (build_matrix_type == 0)
+   {
+      jx_BuildParLaplacianMat(argc, argv, &hp_matrix);
+   }
+   else if (build_matrix_type == 1)
+   {
+      jx_BuildParLaplacianMat2d9pt(argc, argv, &hp_matrix);
+   }
+   else if (build_matrix_type == 2)
+   {
+      jx_BuildParLaplacianMat3d27pt(argc, argv, &hp_matrix);
+   }
+   else if (build_matrix_type == 3)
+   {
+      jx_BuildParConvecDiff(argc, argv, &hp_matrix);
+   }
+   jx_BuildParLaplacianRhs(argc, argv, hp_matrix, &par_rhs);
+   glosize      = jx_ParVectorGlobalSize(par_rhs);
+   partitioning = jx_ParVectorPartitioning(par_rhs);
+   par_sol      = jx_ParVectorCreate(comm, glosize, partitioning);
+   jx_ParVectorSetPartitioningOwner(par_sol, 0);
+   jx_ParVectorInitialize(par_sol);
+   if (initguess == 0)
+   {
+      jx_ParVectorSetConstantValues(par_sol, 0.0);
+   }
+   else
+   {
+      jx_ParVectorSetRandomValues(par_sol, 22775);
+      norm = jx_ParVectorInnerProd(par_sol, par_sol);
+      norm = 1.0 / sqrt(norm);
+      jx_ParVectorScale(norm, par_sol);
+   }
+   endtime = jx_MPI_Wtime();
+   jx_GetWallTime(comm, "BuildParLinearSystem", starttime, endtime, 0, 2);
+   
+   jx_set_mvcpu_handler(new_mvcpu_flag);
+   
+   //----------------------------------------------------------------
+   // 求解线性代数系统
+   //----------------------------------------------------------------
+   starttimeT = jx_MPI_Wtime();
+   switch (solver_id)
+   {
+      case 0:  /* PAMG */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: PAMG \n\n");
+         }
+         starttime = jx_MPI_Wtime();
+         JX_PAMGCreate(&amg_solver);
+         JX_PAMGSetMaxLevels(amg_solver, max_levels);
+         JX_PAMGSetMaxIter(amg_solver, max_iter);
+         JX_PAMGSetCycleType(amg_solver, cycle_type);
+         JX_PAMGSetMeasureType(amg_solver, measure_type);
+         JX_PAMGSetRAP2(amg_solver, rap2);
+         JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
+         JX_PAMGSetTol(amg_solver, tol);
+         JX_PAMGSetConvCriteria(amg_solver, conv_criteria);
+         JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
+         JX_PAMGSetInterpType(amg_solver, interp_type);
+         JX_PAMGSetPMaxElmts(amg_solver, P_max_elmts);
+         JX_PAMGSetAggNumLevels(amg_solver, agg_num_levels);
+         JX_PAMGSetAIRelaxType(amg_solver, ai_relax_type);
+         JX_PAMGSetAIMeasureType(amg_solver, ai_measure_type);
+         JX_PAMGSetStrongThreshold(amg_solver, strong_threshold);
+         JX_PAMGSetMaxRowSum(amg_solver, max_row_sum);
+         JX_PAMGSetPrintLevel(amg_solver, print_level);
+         JX_PAMGSetCoarsestSolverID(amg_solver, coarsestsolverid);
+         JX_PAMGSetCoarseThreshold(amg_solver, coarse_threshold);
+         JX_PAMGSetCoarseRatio(amg_solver, coarse_ratio);
+         JX_PAMGSetRelaxWt(amg_solver, relax_wt);
+         JX_PAMGSetOuterWt(amg_solver, outer_wt);
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 1);  /* sweep for "down" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 2);  /* sweep for "up" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 3);  /* sweep for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);  /* relax_type for "coarsest" */
+         
+         //----------------------------------------------------------------
+         // JX_PAMG Setup
+         //----------------------------------------------------------------
+         if (max_levels != 1)
+         {
+            JX_PAMGSetup(amg_solver, (JX_hpCSRMatrix) hp_matrix);
+         }
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "PAMG Setup", starttime, endtime, 0, 2);
+         
+         //----------------------------------------------------------------
+         // JX_PAMG Solve
+         //----------------------------------------------------------------
+         starttime = jx_MPI_Wtime();
+         JX_PAMGSolve(amg_solver, (JX_hpCSRMatrix)hp_matrix, (JX_ParVector)par_rhs, (JX_ParVector)par_sol);
+         JX_PAMGGetNumIterations(amg_solver, &num_iterations);
+         JX_PAMGGetFinalRelativeResidualNorm(amg_solver, &final_res_norm);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "PAMG Solve", starttime, endtime, 0, 2);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_PAMGDestroy(amg_solver);
+      }
+      break;
+      
+      case 11:  /* CG */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: CG \n\n");
+         }
+         JX_PCGCreate(comm, &solver);
+         JX_PCGSetMaxIter(solver, max_iter);
+         JX_PCGSetTol(solver, tol);
+         JX_PCGSetTwoNorm(solver, twonorm);  // 0: B 范数； 1：l2 范数
+         JX_PCGSetLogging(solver, 1);
+         JX_PCGSetPrintLevel(solver, print_level);
+         
+         //----------------------------------------------------------------
+         // JX_PCG Setup
+         //----------------------------------------------------------------
+         JX_PCGSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         
+         //----------------------------------------------------------------
+         // JX_PCG Solve
+         //----------------------------------------------------------------
+         JX_PCGSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                             (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         
+         JX_PCGGetNumIterations(solver, &num_iterations);
+         JX_PCGGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_PCGDestroy(solver);
+      }
+      break;
+      
+      case 12:  /* PAMG-CG */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: PAMG-CG \n\n");
+         }
+         starttime = jx_MPI_Wtime();
+         JX_PAMGCreate(&amg_solver);
+         JX_PAMGSetMaxLevels(amg_solver, max_levels);
+         JX_PAMGSetMaxIter(amg_solver, 1);
+         JX_PAMGSetCycleType(amg_solver, cycle_type);
+         JX_PAMGSetMeasureType(amg_solver, measure_type);
+         JX_PAMGSetRAP2(amg_solver, rap2);
+         JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
+         JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
+         JX_PAMGSetInterpType(amg_solver, interp_type);
+         JX_PAMGSetPMaxElmts(amg_solver, P_max_elmts);
+         JX_PAMGSetAggNumLevels(amg_solver, agg_num_levels);
+         JX_PAMGSetAIRelaxType(amg_solver, ai_relax_type);
+         JX_PAMGSetAIMeasureType(amg_solver, ai_measure_type);
+         JX_PAMGSetStrongThreshold(amg_solver, strong_threshold);
+         JX_PAMGSetMaxRowSum(amg_solver, max_row_sum);
+         JX_PAMGSetPrintLevel(amg_solver, amg_print_level);
+         JX_PAMGSetCoarseThreshold(amg_solver, coarse_threshold);
+         JX_PAMGSetRelaxWt(amg_solver, relax_wt);
+         JX_PAMGSetOuterWt(amg_solver, outer_wt);
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 1);  /* sweep for "down" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 2);  /* sweep for "up" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 3);  /* sweep for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);  /* relax_type for "coarsest" */
+         JX_PCGCreate(comm, &solver);
+         JX_PCGSetMaxIter(solver, max_iter);
+         JX_PCGSetTol(solver, tol);
+         JX_PCGSetTwoNorm(solver, twonorm);  // 0: B 范数； 1：l2 范数
+         JX_PCGSetLogging(solver, 1);
+         JX_PCGSetPrintLevel(solver, print_level);
+         JX_PCGSetPrecond(solver, (JX_PtrToSolverFcn)JX_PAMGPrecond,
+                                  (JX_PtrToSolverFcn)JX_PAMGSetup, amg_solver);
+         
+         //----------------------------------------------------------------
+         // JX_PAMG and JX_PCG Setup
+         //----------------------------------------------------------------
+         JX_PAMGSetup(amg_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_PCGSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "PAMG-CG Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         
+         //----------------------------------------------------------------
+         // JX_PCG Solve
+         //----------------------------------------------------------------
+         JX_PCGSolve(solver, (JX_Matrix) hp_matrix, // preOperater
+                             (JX_Matrix) hp_matrix, (JX_Vector) par_rhs, (JX_Vector) par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "PAMG-CG Solve", starttime, endtime, 0, 2);
+         JX_PCGGetNumIterations(solver, &num_iterations);
+         JX_PCGGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_PAMGDestroy(amg_solver);
+         JX_PCGDestroy(solver);
+      }
+      break;
+      
+      case 13:  /* DS-CG */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: DS-CG \n\n");
+         }
+         starttime = jx_MPI_Wtime();
+         ds_solver = NULL;
+         JX_PCGCreate(comm, &solver);
+         JX_PCGSetMaxIter(solver, max_iter);
+         JX_PCGSetTol(solver, tol);
+         JX_PCGSetTwoNorm(solver, twonorm);  // 0: B 范数； 1：l2 范数
+         JX_PCGSetLogging(solver, 1);
+         JX_PCGSetPrintLevel(solver, print_level);
+         JX_PCGSetPrecond(solver, (JX_PtrToSolverFcn)JX_DiagScalePrecond,
+                                  (JX_PtrToSolverFcn)JX_DiagScaleSetup, ds_solver);
+         
+         //----------------------------------------------------------------
+         // JX_DS and JX_PCG Setup
+         //----------------------------------------------------------------
+         JX_DiagScaleSetup(ds_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_PCGSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "DS-CG Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         
+         //----------------------------------------------------------------
+         // JX_PCG Solve
+         //----------------------------------------------------------------
+         JX_PCGSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                             (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "DS-CG Solve", starttime, endtime, 0, 2);
+         JX_PCGGetNumIterations(solver, &num_iterations);
+         JX_PCGGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_PCGDestroy(solver);
+      }
+      break;
+      
+      case 14:  /* Euclid-CG */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: Euclid-CG \n\n");
+         }
+         starttime = jx_MPI_Wtime();
+         JX_EuclidCreate(comm, &euclid_solver);
+         JX_EuclidSetParams(euclid_solver, argc, argv);
+         JX_EuclidSetLevel(euclid_solver, euclid_level);
+         JX_EuclidSetBJ(euclid_solver, euclid_bj);
+         JX_PCGCreate(comm, &solver);
+         JX_PCGSetMaxIter(solver, max_iter);
+         JX_PCGSetTol(solver, tol);
+         JX_PCGSetTwoNorm(solver, twonorm);  // 0: B 范数； 1：l2 范数
+         JX_PCGSetLogging(solver, 1);
+         JX_PCGSetPrintLevel(solver, print_level);
+         JX_PCGSetPrecond(solver, (JX_PtrToSolverFcn)JX_EuclidSolve,
+                                  (JX_PtrToSolverFcn)JX_EuclidSetup, euclid_solver);
+         
+         //----------------------------------------------------------------
+         // JX_Euclid and JX_PCG Setup
+         //----------------------------------------------------------------
+         JX_EuclidSetup(euclid_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_PCGSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "Euclid-CG Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         
+         //----------------------------------------------------------------
+         // JX_PCG Solve
+         //----------------------------------------------------------------
+         JX_PCGSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                             (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "Euclid-CG Solve", starttime, endtime, 0, 2);
+         JX_PCGGetNumIterations(solver, &num_iterations);
+         JX_PCGGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_EuclidDestroy(euclid_solver);
+         JX_PCGDestroy(solver);
+      }
+      break;
+      
+      case 21:  /* GMRES */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: GMRES(%d) \n\n", k_dim);
+         }
+         JX_GMRESCreate(comm, &solver);
+         JX_GMRESSetKDim(solver, k_dim);
+         JX_GMRESSetIsCheckRestarted(solver, is_check_restarted); /* Zhou Zhiyang 2011/11/08 */
+         JX_GMRESSetMaxIter(solver, max_iter);
+         JX_GMRESSetTol(solver, tol);
+         JX_GMRESSetLogging(solver, 1);
+         JX_GMRESSetPrintLevel(solver, print_level); /* 是否在屏幕上打印残量等信息 */
+         
+         //----------------------------------------------------------------
+         // JX_GMRES Setup
+         //----------------------------------------------------------------
+         JX_GMRESSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         
+         //----------------------------------------------------------------
+         // JX_GMRES Solve
+         //----------------------------------------------------------------
+         JX_GMRESSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                               (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         JX_GMRESGetNumIterations(solver, &num_iterations);
+         JX_GMRESGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_GMRESDestroy(solver);
+      }
+      break;
+      
+      case 22:  /* PAMG-GMRES */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: PAMG-GMRES(%d) \n\n", k_dim);
+         }
+         starttime = jx_MPI_Wtime();
+         JX_PAMGCreate(&amg_solver);
+         JX_PAMGSetMaxLevels(amg_solver, max_levels);
+         JX_PAMGSetMaxIter(amg_solver, 1);
+         JX_PAMGSetCycleType(amg_solver, cycle_type);
+         JX_PAMGSetMeasureType(amg_solver, measure_type);
+         JX_PAMGSetRAP2(amg_solver, rap2);
+         JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
+         JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
+         JX_PAMGSetInterpType(amg_solver, interp_type);
+         JX_PAMGSetPMaxElmts(amg_solver, P_max_elmts);
+         JX_PAMGSetAggNumLevels(amg_solver, agg_num_levels);
+         JX_PAMGSetAIRelaxType(amg_solver, ai_relax_type);
+         JX_PAMGSetAIMeasureType(amg_solver, ai_measure_type);
+         JX_PAMGSetStrongThreshold(amg_solver, strong_threshold);
+         JX_PAMGSetMaxRowSum(amg_solver, max_row_sum);
+         JX_PAMGSetPrintLevel(amg_solver, amg_print_level);
+         JX_PAMGSetCoarseThreshold(amg_solver, coarse_threshold);
+         JX_PAMGSetRelaxWt(amg_solver, relax_wt);
+         JX_PAMGSetOuterWt(amg_solver, outer_wt);
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 1);  /* sweep for "down" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 2);  /* sweep for "up" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 3);  /* sweep for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);  /* relax_type for "coarsest" */
+         JX_GMRESCreate(comm, &solver);
+         JX_GMRESSetKDim(solver, k_dim);
+         JX_GMRESSetIsCheckRestarted(solver, is_check_restarted); /* Zhou Zhiyang 2011/11/08 */
+         JX_GMRESSetMaxIter(solver, max_iter);
+         JX_GMRESSetTol(solver, tol);
+         JX_GMRESSetLogging(solver, 1);
+         JX_GMRESSetPrintLevel(solver, print_level); /* 是否在屏幕上打印残量等信息 */
+         JX_GMRESSetPrecond(solver, (JX_PtrToSolverFcn) JX_PAMGPrecond,
+                                    (JX_PtrToSolverFcn) JX_PAMGSetup, amg_solver);
+         
+         //----------------------------------------------------------------
+         // JX_PAMG and JX_GMRES Solve
+         //----------------------------------------------------------------
+         JX_PAMGSetup(amg_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_GMRESSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "PAMG-GMRES Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         
+         //----------------------------------------------------------------
+         // JX_GMRES Solve
+         //----------------------------------------------------------------
+         JX_GMRESSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                               (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "PAMG-GMRES Solve", starttime, endtime, 0, 2);
+         JX_GMRESGetNumIterations(solver, &num_iterations);
+         JX_GMRESGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_PAMGDestroy(amg_solver);
+         JX_GMRESDestroy(solver);
+      }
+      break;
+      
+      case 23:  /* DS-GMRES */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: DS-GMRES(%d) \n\n", k_dim);
+         }
+         starttime = jx_MPI_Wtime();
+         ds_solver = NULL;
+         JX_GMRESCreate(comm, &solver);
+         JX_GMRESSetKDim(solver, k_dim);
+         JX_GMRESSetIsCheckRestarted(solver, is_check_restarted); /* peghoty 2011/11/08 */
+         JX_GMRESSetMaxIter(solver, max_iter);
+         JX_GMRESSetTol(solver, tol);
+         JX_GMRESSetLogging(solver, 1);
+         JX_GMRESSetPrintLevel(solver, print_level); /* 是否在屏幕上打印残量等信息 */
+         JX_GMRESSetPrecond(solver, (JX_PtrToSolverFcn)JX_DiagScalePrecond,
+                                    (JX_PtrToSolverFcn)JX_DiagScaleSetup, ds_solver);
+         
+         //----------------------------------------------------------------
+         // JX_DS and JX_GMRES Setup
+         //----------------------------------------------------------------
+         JX_DiagScaleSetup(ds_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_GMRESSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "DS-GMRES Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         
+         //----------------------------------------------------------------
+         // JX_GMRES Solve
+         //----------------------------------------------------------------
+         JX_GMRESSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                               (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "DS-GMRES Solve", starttime, endtime, 0, 2);
+         JX_GMRESGetNumIterations(solver, &num_iterations);
+         JX_GMRESGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if (print_level == 0 && myid == 0)
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_GMRESDestroy(solver);
+      }
+      break;
+      
+      case 24:  /* Euclid-GMRES */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: Euclid-GMRES(%d) \n\n", k_dim);
+         }
+         starttime = jx_MPI_Wtime();
+         JX_EuclidCreate(comm, &euclid_solver);
+         JX_EuclidSetParams(euclid_solver, argc, argv);
+         JX_EuclidSetLevel(euclid_solver, euclid_level);
+         JX_EuclidSetBJ(euclid_solver, euclid_bj);
+         JX_GMRESCreate(comm, &solver);
+         JX_GMRESSetKDim(solver, k_dim);
+         JX_GMRESSetIsCheckRestarted(solver, is_check_restarted); /* peghoty 2011/11/08 */
+         JX_GMRESSetMaxIter(solver, max_iter);
+         JX_GMRESSetTol(solver, tol);
+         JX_GMRESSetLogging(solver, 1);
+         JX_GMRESSetPrintLevel(solver, print_level); /* 是否在屏幕上打印残量等信息 */
+         JX_GMRESSetPrecond(solver, (JX_PtrToSolverFcn)JX_EuclidSolve,
+                                    (JX_PtrToSolverFcn)JX_EuclidSetup, euclid_solver);
+         JX_EuclidSetup(euclid_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_GMRESSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "Euclid-GMRES Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         JX_GMRESSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                               (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "Euclid-GMRES Solve", starttime, endtime, 0, 2);
+         JX_GMRESGetNumIterations(solver, &num_iterations);
+         JX_GMRESGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if (print_level == 0 && myid == 0)
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_EuclidDestroy(euclid_solver);
+         JX_GMRESDestroy(solver);
+      }
+      break;
+      
+      case 31:  /* BICGStab */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: BICGStab \n\n");
+         }
+         JX_BiCGSTABCreate(comm, &solver);
+         JX_BiCGSTABSetMaxIter(solver, max_iter);
+         JX_BiCGSTABSetTol(solver, tol);
+         JX_BiCGSTABSetAbsoluteTol(solver, 0.0);
+         JX_BiCGSTABSetConvCriteria(solver, 0);
+         JX_BiCGSTABSetLogging(solver, 1);
+         JX_BiCGSTABSetPrintLevel(solver, print_level);
+         JX_BiCGSTABSetup(solver, (JX_Matrix) hp_matrix, (JX_Vector) par_rhs, (JX_Vector) par_sol);
+         JX_BiCGSTABSolve(solver, (JX_Matrix) hp_matrix, // preOperater
+                                  (JX_Matrix) hp_matrix, (JX_Vector) par_rhs, (JX_Vector) par_sol);
+         JX_BiCGSTABGetNumIterations(solver, &num_iterations);
+         JX_BiCGSTABGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_BiCGSTABDestroy(solver);
+      }
+      break;
+      
+      case 32:  /* PAMG-BICGStab */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: PAMG-BICGStab \n\n");
+         }
+         JX_PAMGCreate(&amg_solver);
+         JX_PAMGSetMaxLevels(amg_solver, max_levels);
+         JX_PAMGSetMaxIter(amg_solver, 1);
+         JX_PAMGSetCycleType(amg_solver, cycle_type);
+         JX_PAMGSetMeasureType(amg_solver, measure_type);
+         JX_PAMGSetRAP2(amg_solver, rap2);
+         JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
+         JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
+         JX_PAMGSetInterpType(amg_solver, interp_type);
+         JX_PAMGSetPMaxElmts(amg_solver, P_max_elmts);
+         JX_PAMGSetAggNumLevels(amg_solver, agg_num_levels);
+         JX_PAMGSetAIRelaxType(amg_solver, ai_relax_type);
+         JX_PAMGSetAIMeasureType(amg_solver, ai_measure_type);
+         JX_PAMGSetStrongThreshold(amg_solver, strong_threshold);
+         JX_PAMGSetMaxRowSum(amg_solver, max_row_sum);
+         JX_PAMGSetPrintLevel(amg_solver, amg_print_level);
+         JX_PAMGSetCoarseThreshold(amg_solver, coarse_threshold);
+         JX_PAMGSetRelaxWt(amg_solver, relax_wt);
+         JX_PAMGSetOuterWt(amg_solver, outer_wt);
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 1);  /* sweep for "down" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 2);  /* sweep for "up" */
+         JX_PAMGSetCycleNumSweeps(amg_solver, 1, 3);  /* sweep for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);  /* relax_type for "coarsest" */
+         JX_BiCGSTABCreate(comm, &solver);
+         JX_BiCGSTABSetMaxIter(solver, max_iter);
+         JX_BiCGSTABSetTol(solver, tol);
+         JX_BiCGSTABSetAbsoluteTol(solver, 0.0);
+         JX_BiCGSTABSetConvCriteria(solver, 0);
+         JX_BiCGSTABSetLogging(solver, 1);
+         JX_BiCGSTABSetPrintLevel(solver, print_level);
+         JX_BiCGSTABSetPrecond(solver, (JX_PtrToSolverFcn) JX_PAMGPrecond,
+                                       (JX_PtrToSolverFcn) JX_PAMGSetup, amg_solver);
+         JX_PAMGSetup(amg_solver, (JX_hpCSRMatrix) hp_matrix);
+         JX_BiCGSTABSetup(solver, (JX_Matrix) hp_matrix, (JX_Vector) par_rhs, (JX_Vector) par_sol);
+         JX_BiCGSTABSolve(solver, (JX_Matrix) hp_matrix, // preOperater
+                                  (JX_Matrix) hp_matrix, (JX_Vector) par_rhs, (JX_Vector) par_sol);
+         JX_BiCGSTABGetNumIterations(solver, &num_iterations);
+         JX_BiCGSTABGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if ((print_level == 0) && (myid == 0))
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_PAMGDestroy(amg_solver);
+         JX_BiCGSTABDestroy(solver);
+      }
+      break;
+      
+      case 33:  /* DS-BiCGSTAB */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: DS-BiCGSTAB \n\n");
+         }
+         starttime = jx_MPI_Wtime();
+         ds_solver = NULL;
+         JX_BiCGSTABCreate(comm, &solver);
+         JX_BiCGSTABSetMaxIter(solver, max_iter);
+         JX_BiCGSTABSetTol(solver, tol);
+         JX_BiCGSTABSetAbsoluteTol(solver, 0.0);
+         JX_BiCGSTABSetConvCriteria(solver, 0);
+         JX_BiCGSTABSetLogging(solver, 1);
+         JX_BiCGSTABSetPrintLevel(solver, print_level);
+         JX_BiCGSTABSetPrecond(solver, (JX_PtrToSolverFcn)JX_DiagScalePrecond,
+                                       (JX_PtrToSolverFcn)JX_DiagScaleSetup, ds_solver);
+         JX_DiagScaleSetup(ds_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_BiCGSTABSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "DS-BiCGSTAB Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         JX_BiCGSTABSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                                  (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "DS-BiCGSTAB Solve", starttime, endtime, 0, 2);
+         JX_BiCGSTABGetNumIterations(solver, &num_iterations);
+         JX_BiCGSTABGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if (print_level == 0 && myid == 0)
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_BiCGSTABDestroy(solver);
+      }
+      break;
+      
+      case 34:  /* Euclid-BiCGSTAB */
+      {
+         if (myid == 0)
+         {
+            jx_printf("\n >>> Solver: Euclid-BiCGSTAB \n\n");
+         }
+         starttime = jx_MPI_Wtime();
+         JX_EuclidCreate(comm, &euclid_solver);
+         JX_EuclidSetParams(euclid_solver, argc, argv);
+         JX_EuclidSetLevel(euclid_solver, euclid_level);
+         JX_EuclidSetBJ(euclid_solver, euclid_bj);
+         JX_BiCGSTABCreate(comm, &solver);
+         JX_BiCGSTABSetMaxIter(solver, max_iter);
+         JX_BiCGSTABSetTol(solver, tol);
+         JX_BiCGSTABSetAbsoluteTol(solver, 0.0);
+         JX_BiCGSTABSetConvCriteria(solver, 0);
+         JX_BiCGSTABSetLogging(solver, 1);
+         JX_BiCGSTABSetPrintLevel(solver, print_level);
+         JX_BiCGSTABSetPrecond(solver, (JX_PtrToSolverFcn)JX_EuclidSolve,
+                                       (JX_PtrToSolverFcn)JX_EuclidSetup, euclid_solver);
+         JX_EuclidSetup(euclid_solver, (JX_hpCSRMatrix)hp_matrix);
+         JX_BiCGSTABSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "Euclid-BiCGSTAB Setup", starttime, endtime, 0, 2);
+         starttime = jx_MPI_Wtime();
+         JX_BiCGSTABSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                                  (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+         endtime = jx_MPI_Wtime();
+         jx_GetWallTime(comm, "Euclid-BiCGSTAB Solve", starttime, endtime, 0, 2);
+         JX_BiCGSTABGetNumIterations(solver, &num_iterations);
+         JX_BiCGSTABGetFinalRelativeResidualNorm(solver, &final_res_norm);
+         if (print_level == 0 && myid == 0)
+         {
+            jx_printf(" >>> num_iterations = %d\n", num_iterations);
+            jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+         }
+         JX_EuclidDestroy(euclid_solver);
+         JX_BiCGSTABDestroy(solver);
+      }
+      break;
+   }
+   endtimeT = jx_MPI_Wtime();
+   jx_GetWallTime(comm, "Total Sove Time", starttimeT, endtimeT, 0, 2);
+
+   if (jx__global_mvcpu_flag)
+   {
+      jx_MPI_Reduce(&jx_total_elapsed_time_matvec, &mv_time_min, 1, JX_MPI_REAL, MPI_MIN, 0, comm);
+      jx_MPI_Reduce(&jx_total_elapsed_time_matvec, &mv_time_max, 1, JX_MPI_REAL, MPI_MAX, 0, comm);
+      jx_MPI_Reduce(&jx_total_elapsed_time_matvec, &mv_time_avg, 1, JX_MPI_REAL, MPI_SUM, 0, comm);
+      if (myid == 0) jx_printf("\n >> %s: time(min,max,ave) = (%.1f, %.1f, %.1f) seconds\n\n",
+                         "Matvec Time", mv_time_min, mv_time_max, mv_time_avg / nprocs);
+   }
+
+   //----------------------------------------------------------------
+   // 将近似解向量保存到文件中
+   //----------------------------------------------------------------
+   if (keepsol)
+   {
+      jx_Vector *ser_sol = NULL;
+      ser_sol = jx_ParVectorToVectorAll(par_sol);
+      if (myid == 0)
+      {
+         jx_SeqVectorPrint(ser_sol, "./app");
+      }
+      jx_SeqVectorDestroy(ser_sol);
+   }
+   
+   //----------------------------------------------------------------
+   // 销毁并行矩阵和并行向量
+   //----------------------------------------------------------------
+   #ifdef USING_HWLOC
+   jx_hpCSRhardwareDestroy();
+   #endif
+   jx_hpCSRMatrixDestroy(hp_matrix);
+   jx_ParVectorDestroy(par_rhs);
+   jx_ParVectorDestroy(par_sol);
+   
+   //----------------------------------------------------------------
+   // 终止 MPI
+   //----------------------------------------------------------------
+   jx_MPI_Finalize();
+   
+   return 0;
+}
+
+/*!
+ * \fn JX_Int jx_ParVectorSetRandomValues
+ */
+JX_Int
+jx_ParVectorSetRandomValues( jx_ParVector *v, JX_Int seed )
+{
+   JX_Int my_id;
+   jx_Vector *v_local = jx_ParVectorLocalVector(v);
+
+   MPI_Comm 	comm = jx_ParVectorComm(v);
+   jx_MPI_Comm_rank(comm, &my_id); 
+
+   seed *= (my_id + 1);
+           
+   return jx_SeqVectorSetRandomValues(v_local,seed);
+}
+
+/*!
+ * \fn JX_Int jx_SeqVectorSetRandomValues
+ */
+JX_Int
+jx_SeqVectorSetRandomValues( jx_Vector *x, JX_Int seed )
+{
+   JX_Real  *vector_data = jx_VectorData(x);
+   JX_Int      size        = jx_VectorSize(x);
+   JX_Int      i, ierr = 0;
+
+   jx_SeedRand(seed);
+
+   size *= jx_VectorNumVectors(x);
+
+   /* RDF: threading this loop may cause problems because of jx_Rand() */
+   for (i = 0; i < size; i ++)
+   {
+      vector_data[i] = 2.0 * jx_Rand() - 1.0;
+   }
+   
+   return ierr;
+}
+
+/*!
+ * \fn void jx_BuildParLaplacianMat
+ */
+void
+jx_BuildParLaplacianMat( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr )
+{
+    jx_hpCSRMatrix *hp_A = NULL;
+
+    JX_Real *values = NULL;
+    JX_Int nx, ny, nz;
+    JX_Int P, Q, R;
+    JX_Int p, q, r;
+    JX_Int num_procs, my_id;
+    JX_Int arg_index;
+    JX_Real cx, cy, cz;
+    
+   /*-----------------------
+    * Initialize some stuff
+    *-----------------------*/
+    jx_MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    jx_MPI_Comm_rank(MPI_COMM_WORLD, &my_id);
+    
+   /*--------------
+    * Set defaults
+    *--------------*/
+    nx = 10;
+    ny = 10;
+    nz = 10;
+    P = 1;
+    Q = num_procs;
+    R = 1;
+    cx = 1.0;
+    cy = 1.0;
+    cz = 1.0;
+    
+   /*--------------------
+    * Parse command line
+    *--------------------*/
+    arg_index = 0;
+    while (arg_index < argc)
+    {
+        if (strcmp(argv[arg_index], "-n") == 0)
+        {
+            arg_index ++;
+            nx = atoi(argv[arg_index++]);
+            ny = atoi(argv[arg_index++]);
+            nz = atoi(argv[arg_index++]);
+        }
+        else if (strcmp(argv[arg_index], "-P") == 0)
+        {
+            arg_index ++;
+            P = atoi(argv[arg_index++]);
+            Q = atoi(argv[arg_index++]);
+            R = atoi(argv[arg_index++]);
+        }
+        else if (strcmp(argv[arg_index], "-c") == 0)
+        {
+            arg_index ++;
+            cx = atof(argv[arg_index++]);
+            cy = atof(argv[arg_index++]);
+            cz = atof(argv[arg_index++]);
+        }
+        else
+        {
+            arg_index ++;
+        }
+    }
+    
+   /*--------------------
+    * Check a few things
+    *--------------------*/
+    if ((P*Q*R) != num_procs)
+    {
+        jx_printf("Error: Invalid number of processors or processor topology\n");
+        exit(1);
+    }
+    
+   /*-------------------------
+    * Print driver parameters
+    *-------------------------*/
+    if (my_id == 0)
+    {
+        jx_printf("  Laplacian:\n");
+        jx_printf("    (nx, ny, nz) = (%d, %d, %d)\n", nx, ny, nz);
+        jx_printf("    (Px, Py, Pz) = (%d, %d, %d)\n", P, Q, R);
+        jx_printf("    (cx, cy, cz) = (%f, %f, %f)\n\n", cx, cy, cz);
+    }
+    
+   /*---------------------------
+    * Set up the grid structure
+    *---------------------------*/
+    p = my_id % P;
+    q = ((my_id - p) / P) % Q;
+    r = (my_id - p - P * q) / (P * Q);
+    
+   /*---------------------
+    * Generate the matrix
+    *---------------------*/
+    values = jx_CTAlloc(JX_Real, 4);
+    values[1] = -cx;
+    values[2] = -cy;
+    values[3] = -cz;
+    values[0] = 0.0;
+    if (nx > 1)
+    {
+        values[0] += 2.0 * cx;
+    }
+    if (ny > 1)
+    {
+        values[0] += 2.0 * cy;
+    }
+    if (nz > 1)
+    {
+        values[0] += 2.0 * cz;
+    }
+
+    hp_A = jx_hpInithpCSRMatrix();
+    jx_hpCSRMatrixPar(hp_A) = jx_GenerateParLaplacian(MPI_COMM_WORLD, nx, ny, nz, P, Q, R, p, q, r, values);
+    jx_TFree(values);
+   *A_ptr = hp_A;
+}
+
+/*!
+ * \fn void jx_BuildParLaplacianMat2d9pt
+ */
+void
+jx_BuildParLaplacianMat2d9pt( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr )
+{
+    jx_hpCSRMatrix *hp_A = NULL;
+    JX_Real *values = NULL;
+    JX_Int num_procs, my_id;
+    JX_Int nx, ny;
+    JX_Int p, q;
+    JX_Int P, Q;
+    JX_Int arg_index;
+    
+   /*-----------------------
+    * Initialize some stuff
+    *-----------------------*/
+    jx_MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    jx_MPI_Comm_rank(MPI_COMM_WORLD, &my_id);
+    
+   /*--------------
+    * Set defaults
+    *--------------*/
+    nx = 10;
+    ny = 10;
+    P = 1;
+    Q = num_procs;
+    
+   /*--------------------
+    * Parse command line
+    *--------------------*/
+    arg_index = 0;
+    while (arg_index < argc)
+    {
+        if (strcmp(argv[arg_index], "-n") == 0)
+        {
+            arg_index ++;
+            nx = atoi(argv[arg_index++]);
+            ny = atoi(argv[arg_index++]);
+        }
+        else if (strcmp(argv[arg_index], "-P") == 0)
+        {
+            arg_index ++;
+            P = atoi(argv[arg_index++]);
+            Q = atoi(argv[arg_index++]);
+        }
+        else
+        {
+            arg_index ++;
+        }
+    }
+    
+   /*--------------------
+    * Check a few things
+    *--------------------*/
+    if ((P*Q) != num_procs)
+    {
+        jx_printf("Error: Invalid number of processors or processor topology\n");
+        exit(1);
+    }
+    
+   /*-------------------------
+    * Print driver parameters
+    *-------------------------*/
+    if (my_id == 0)
+    {
+        jx_printf("  Laplacian 9pt:\n");
+        jx_printf("    (nx, ny) = (%d, %d)\n", nx, ny);
+        jx_printf("    (Px, Py) = (%d, %d)\n\n", P, Q);
+    }
+    
+   /*---------------------------
+    * Set up the grid structure
+    *---------------------------*/
+    p = my_id % P;
+    q = (my_id - p) / P;
+    
+   /*---------------------
+    * Generate the matrix
+    *---------------------*/
+    values = jx_CTAlloc(JX_Real, 2);
+    values[1] = -1.0;
+    values[0] = 0.0;
+    if (nx > 1)
+    {
+        values[0] += 2.0;
+    }
+    if (ny > 1)
+    {
+        values[0] += 2.0;
+    }
+    if ((nx > 1) && (ny > 1))
+    {
+        values[0] += 4.0;
+    }
+    hp_A = jx_hpInithpCSRMatrix();
+    jx_hpCSRMatrixPar(hp_A) = jx_GenerateParLaplacian2d9pt(MPI_COMM_WORLD, nx, ny, P, Q, p, q, values);
+    jx_TFree(values);
+   *A_ptr = hp_A;
+}
+
+/*!
+ * \fn void jx_BuildParLaplacianMat3d27pt
+ */
+void
+jx_BuildParLaplacianMat3d27pt( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr )
+{
+    jx_hpCSRMatrix *hp_A = NULL;
+    JX_Real *values = NULL;
+    JX_Int nx, ny, nz;
+    JX_Int P, Q, R;
+    JX_Int p, q, r;
+    JX_Int num_procs, my_id;
+    JX_Int arg_index;
+    
+   /*-----------------------
+    * Initialize some stuff
+    *-----------------------*/
+    jx_MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    jx_MPI_Comm_rank(MPI_COMM_WORLD, &my_id);
+    
+   /*--------------
+    * Set defaults
+    *--------------*/
+    nx = 10;
+    ny = 10;
+    nz = 10;
+    P = 1;
+    Q = num_procs;
+    R = 1;
+    
+   /*--------------------
+    * Parse command line
+    *--------------------*/
+    arg_index = 0;
+    while (arg_index < argc)
+    {
+        if (strcmp(argv[arg_index], "-n") == 0)
+        {
+            arg_index ++;
+            nx = atoi(argv[arg_index++]);
+            ny = atoi(argv[arg_index++]);
+            nz = atoi(argv[arg_index++]);
+        }
+        else if (strcmp(argv[arg_index], "-P") == 0)
+        {
+            arg_index ++;
+            P = atoi(argv[arg_index++]);
+            Q = atoi(argv[arg_index++]);
+            R = atoi(argv[arg_index++]);
+        }
+        else
+        {
+            arg_index ++;
+        }
+    }
+    
+   /*--------------------
+    * Check a few things
+    *--------------------*/
+    if ((P*Q*R) != num_procs)
+    {
+        jx_printf("Error: Invalid number of processors or processor topology\n");
+        exit(1);
+    }
+    
+   /*-------------------------
+    * Print driver parameters
+    *-------------------------*/
+    if (my_id == 0)
+    {
+        jx_printf("  Laplacian_27pt:\n");
+        jx_printf("    (nx, ny, nz) = (%d, %d, %d)\n", nx, ny, nz);
+        jx_printf("    (Px, Py, Pz) = (%d, %d, %d)\n\n", P, Q, R);
+    }
+    
+   /*---------------------------
+    * Set up the grid structure
+    *---------------------------*/
+    p = my_id % P;
+    q = ((my_id - p) / P) % Q;
+    r = (my_id - p - P * q) / (P * Q);
+    
+   /*---------------------
+    * Generate the matrix
+    *---------------------*/
+    values = jx_CTAlloc(JX_Real, 2);
+    values[0] = 26.0;
+    if ((nx == 1) || (ny == 1) || (nz == 1))
+    {
+        values[0] = 8.0;
+    }
+    if ((nx*ny == 1) || (nx*nz == 1) || (ny*nz == 1))
+    {
+        values[0] = 2.0;
+    }
+    values[1] = -1.0;
+    hp_A = jx_hpInithpCSRMatrix();
+    jx_hpCSRMatrixPar(hp_A) = jx_GenerateParLaplacian3d27pt(MPI_COMM_WORLD, nx, ny, nz, P, Q, R, p, q, r, values);
+    jx_TFree(values);
+   *A_ptr = hp_A;
+}
+
+/*!
+ * \fn void jx_BuildParConvecDiff
+ */
+void
+jx_BuildParConvecDiff( JX_Int argc, char *argv[], jx_hpCSRMatrix **A_ptr )
+{
+    jx_hpCSRMatrix *hp_A = NULL;
+    JX_Real *values = NULL;
+    JX_Int nx, ny, nz;
+    JX_Int P, Q, R;
+    JX_Int p, q, r;
+    JX_Int num_procs, my_id;
+    JX_Int arg_index;
+    JX_Real cx, cy, cz;
+    JX_Real ax, ay, az;
+    JX_Real hinx, hiny, hinz;
+    
+   /*-----------------------
+    * Initialize some stuff
+    *-----------------------*/
+    jx_MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    jx_MPI_Comm_rank(MPI_COMM_WORLD, &my_id);
+    
+   /*--------------
+    * Set defaults
+    *--------------*/
+    nx = 10;
+    ny = 10;
+    nz = 10;
+    P = 1;
+    Q = num_procs;
+    R = 1;
+    cx = 1.0;
+    cy = 1.0;
+    cz = 1.0;
+    ax = 1.0;
+    ay = 1.0;
+    az = 1.0;
+   /*--------------------
+    * Parse command line
+    *--------------------*/
+    arg_index = 0;
+    while (arg_index < argc)
+    {
+        if (strcmp(argv[arg_index], "-n") == 0)
+        {
+            arg_index ++;
+            nx = atoi(argv[arg_index++]);
+            ny = atoi(argv[arg_index++]);
+            nz = atoi(argv[arg_index++]);
+        }
+        else if (strcmp(argv[arg_index], "-P") == 0)
+        {
+            arg_index ++;
+            P = atoi(argv[arg_index++]);
+            Q = atoi(argv[arg_index++]);
+            R = atoi(argv[arg_index++]);
+        }
+        else if (strcmp(argv[arg_index], "-c") == 0)
+        {
+            arg_index ++;
+            cx = atof(argv[arg_index++]);
+            cy = atof(argv[arg_index++]);
+            cz = atof(argv[arg_index++]);
+        }
+        else if (strcmp(argv[arg_index], "-a") == 0)
+        {
+            arg_index ++;
+            ax = atof(argv[arg_index++]);
+            ay = atof(argv[arg_index++]);
+            az = atof(argv[arg_index++]);
+        }
+        else
+        {
+            arg_index ++;
+        }
+    }
+    
+   /*--------------------
+    * Check a few things
+    *--------------------*/
+    if ((P*Q*R) != num_procs)
+    {
+        jx_printf("Error: Invalid number of processors or processor topology\n");
+        exit(1);
+    }
+    
+   /*-------------------------
+    * Print driver parameters
+    *-------------------------*/
+    if (my_id == 0)
+    {
+        jx_printf("  Convection-Diffusion: \n");
+        jx_printf("    -cx Dxx - cy Dyy - cz Dzz + ax Dx + ay Dy + az Dz = f\n");
+        jx_printf("    (nx, ny, nz) = (%d, %d, %d)\n", nx, ny, nz);
+        jx_printf("    (Px, Py, Pz) = (%d, %d, %d)\n", P,  Q,  R);
+        jx_printf("    (cx, cy, cz) = (%f, %f, %f)\n", cx, cy, cz);
+        jx_printf("    (ax, ay, az) = (%f, %f, %f)\n\n", ax, ay, az);
+    }
+    
+   /*---------------------------
+    * Set up the grid structure
+    *---------------------------*/
+    p = my_id % P;
+    q = ((my_id - p) / P) % Q;
+    r = (my_id - p - P * q) / (P * Q);
+    hinx = 1.0 / (nx + 1);
+    hiny = 1.0 / (ny + 1);
+    hinz = 1.0 / (nz + 1);
+    
+   /*---------------------
+    * Generate the matrix
+    *---------------------*/
+    values = jx_CTAlloc(JX_Real, 7);
+    values[1] = -cx / (hinx * hinx);
+    values[2] = -cy / (hiny * hiny);
+    values[3] = -cz / (hinz * hinz);
+    values[4] = -cx / (hinx * hinx) + ax / hinx;
+    values[5] = -cy / (hiny * hiny) + ay / hiny;
+    values[6] = -cz / (hinz * hinz) + az / hinz;
+    values[0] = 0.0;
+    if (nx > 1)
+    {
+        values[0] += 2.0 * cx / (hinx * hinx) - 1.0 * ax / hinx;
+    }
+    if (ny > 1)
+    {
+        values[0] += 2.0 * cy / (hiny * hiny) - 1.0 * ay / hiny;
+    }
+    if (nz > 1)
+    {
+        values[0] += 2.0 * cz / (hinz * hinz) - 1.0 * az / hinz;
+    }
+    hp_A = jx_hpInithpCSRMatrix();
+    jx_hpCSRMatrixPar(hp_A) = jx_GenerateParConvecDiff(MPI_COMM_WORLD, nx, ny, nz, P, Q, R, p, q, r, values);
+    jx_TFree(values);
+   *A_ptr = hp_A;
+}
+
+/*!
+ * \fn void jx_BuildParLaplacianRhs
+ */
+void
+jx_BuildParLaplacianRhs( JX_Int argc, char *argv[], jx_hpCSRMatrix *hp_A, jx_ParVector **b_ptr )
+{
+    JX_Int build_rhs_type = 1;
+    jx_ParVector *b = NULL;
+    jx_Vector *loc_b = NULL;
+    JX_Int *partition = NULL;
+    JX_Int my_id, global_num_rows;
+    JX_Int arg_index;
+    JX_Real norm;
+    jx_ParCSRMatrix *A = jx_hpCSRMatrixPar(hp_A);
+    
+   /*-----------------------
+    * Initialize some stuff
+    *-----------------------*/
+    jx_MPI_Comm_rank(MPI_COMM_WORLD, &my_id);
+    
+   /*-------------------
+    * Get the partition
+    *-------------------*/
+    jx_ParCSRMatrixGetRowPartitioning(A, &partition);
+    global_num_rows = jx_ParCSRMatrixGlobalNumRows(A);
+    
+   /*--------------------
+    * Parse command line
+    *--------------------*/
+    arg_index = 0;
+    while (arg_index < argc)
+    {
+        if (strcmp(argv[arg_index], "-one") == 0)
+        {
+            arg_index ++;
+            build_rhs_type = 1;
+        }
+        else if (strcmp(argv[arg_index], "-rdm") == 0)
+        {
+            arg_index ++;
+            build_rhs_type = 2;
+        }
+        else
+        {
+            arg_index ++;
+        }
+    }
+    if (build_rhs_type == 1)
+    {
+        if (my_id == 0)
+        {
+            jx_printf("  RHS vector has unit components\n");
+            loc_b = jx_SeqVectorCreate(global_num_rows);
+            jx_SeqVectorInitialize(loc_b);
+            jx_SeqVectorSetConstantValues(loc_b, 1.0);
+        }
+    }
+    else if (build_rhs_type == 2)
+    {
+        if (my_id == 0)
+        {
+            jx_printf("  RHS vector has random components and unit 2-norm\n");
+            loc_b = jx_SeqVectorCreate(global_num_rows);
+            jx_SeqVectorInitialize(loc_b);
+            jx_SeqVectorSetRandomValues(loc_b, 22775);
+            norm = jx_SeqVectorInnerProd(loc_b, loc_b);
+            norm = 1.0 / sqrt(norm);
+            jx_SeqVectorScale(norm, loc_b);
+        }
+    }
+    b = jx_VectorToParVector(MPI_COMM_WORLD, loc_b, partition);
+    if (my_id == 0)
+    {
+        jx_SeqVectorDestroy(loc_b);
+    }
+   *b_ptr = b;
+}

@@ -1,0 +1,398 @@
+#========================================================================#
+#  JXPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        #
+#  Institute of Applied Physics and Computational Mathematics            #
+#  School of Mathematics and Computational Science Xiangtan University   #
+#  peghoty@163.com   (Zhou Zhiyang)                                      #
+#  xwxu@iapcm.ac.cn  (Xu Xiaowen)                                        #
+#  yuexq1111@163.com (Yue Xiaoqiang)                                     #
+#========================================================================#
+
+# Created by peghoty 2011/09/022
+# Modified by Yue Xiaoqiang on 2012/10/22
+# Modified by mrz on 2023/4/9
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# JXPAMG directory and MPI diectory
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+JXPAMGDIR   = /vol8/home/xtu_pcy/TH-MXP-JXPAMG/jxpamg-basic-D
+JXFPAMGDIR  = /vol8/home/xtu_pcy/TH-MXP-JXPAMG/jxpamg-basic-F
+
+JXPAMG_USE_MPI = YES
+ifdef JXPAMG_USE_MPI
+MPIDIR    = /vol8/appsoftware/mpi-x
+endif
+
+JXFPAMG_USE_MPI = YES
+ifdef JXFPAMG_USE_MPI
+MPIDIR    = /vol8/appsoftware/mpi-x
+endif
+
+#天河 hthreads 路径++++++++++++++++++++++++++++++++++++++++++++++++++
+HT_ROOT   = /vol8/appsoftware/mt3000_programming_env/hthreads
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Use the OpenMP parallelism [YES] or not [#YES]
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JXPAMG_USE_OMP  = YES
+JXFPAMG_USE_OMP = YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Use big-int and big-double structures [YES] or not [#YES]
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_USE_BIG_INT = #YES
+JX_USE_BIG_DOUBLE = #YES
+JX_USE_COMPLEX = #YES
+
+JXF_USE_BIG_INT = #YES
+JXF_USE_BIG_DOUBLE = #YES
+JXF_USE_COMPLEX = #YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Add debug compiler opention  
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+DEBUG_OPTION = #YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Use MUMPS as the coarsest solver [YES] or not [#YES]
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_USE_MUMPS = #YES
+ifdef JX_USE_MUMPS
+topdir = /home/yuexq/MUMPS_4.10.0
+endif
+
+JXF_USE_MUMPS = #YES
+ifdef JXF_USE_MUMPS
+topdir = /home/yuexq/MUMPS_4.10.0
+endif
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Use LAPACK as the air coarse [YES] or not [#YES]
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_USE_LAPACK  = #YES
+JXF_USE_LAPACK = #YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# About hwloc
+# NOTICE: Setting USING_HWLOC to 'no' will result in the shutdown of 
+#         JX_REODER_SEND_RECV and JX_hoAllreduce
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+USING_HWLOC = #YES 
+HWLOC_DIR	= #HWLOC_DIR
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# reoder send and recv
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_REODER_SEND_RECV = #YES
+JX_REODER_SEND_CLOSER = #YES
+JX_REODER_RECV_CLOSER = #YES
+
+JXF_REODER_SEND_RECV = #YES
+JXF_REODER_SEND_CLOSER = #YES
+JXF_REODER_RECV_CLOSER = #YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Optimization of Version 2.0.2
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JX_MiniBranRAP = YES
+JX_SplitRAP = #YES
+JX_hoAllreduce = #YES
+
+JXF_MiniBranRAP = YES
+JXF_SplitRAP = #YES
+JXF_hoAllreduce = #YES
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# suffixes
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+.SUFFIXES:.c .f90 .f .for
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# compiler
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ifdef JXPAMG_USE_MPI
+ifdef JXPAMG_USE_OMP
+FC = $(MPIDIR)/bin/mpif90 -fopenmp
+CC = $(MPIDIR)/bin/mpicc -fopenmp
+else
+FC = $(MPIDIR)/bin/mpif90
+CC = $(MPIDIR)/bin/mpicc
+endif
+else
+ifdef JXPAMG_USE_OMP
+FC = gfortran -fopenmp
+CC = gcc -fopenmp
+else
+FC = gfortran
+CC = gcc
+endif
+endif
+
+ifdef JXFPAMG_USE_MPI
+ifdef JXFPAMG_USE_OMP
+FC = $(MPIDIR)/bin/mpif90 -fopenmp
+CC = $(MPIDIR)/bin/mpicc -fopenmp
+else
+FC = $(MPIDIR)/bin/mpif90
+CC = $(MPIDIR)/bin/mpicc
+endif
+else
+ifdef JXFPAMG_USE_OMP
+FC = gfortran -fopenmp
+CC = gcc -fopenmp
+else
+FC = gfortran
+CC = gcc
+endif
+endif
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# compile option
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+DEST := /usr/local/jxpamg-1.1
+
+ifdef JXPAMG_USE_MPI
+JX_MPI_CP_OPTION = -DJX_USING_MPI=1
+else
+JX_MPI_CP_OPTION = -DJX_USING_MPI=0
+endif
+
+ifdef JXFPAMG_USE_MPI
+JXF_MPI_CP_OPTION = -DJXF_USING_MPI=1
+else
+JXF_MPI_CP_OPTION = -DJXF_USING_MPI=0
+endif
+
+ifdef JXPAMG_USE_OMP
+JX_OMP_CP_OPTION = -DJX_USING_OPENMP=1
+else
+JX_OMP_CP_OPTION = -DJX_USING_OPENMP=0
+endif
+
+ifdef JXFPAMG_USE_OMP
+JXF_OMP_CP_OPTION = -DJXF_USING_OPENMP=1
+else
+JXF_OMP_CP_OPTION = -DJXF_USING_OPENMP=0
+endif
+
+ifdef JX_USE_BIG_INT
+JX_BIG_INT_OPTION = -DJX_USING_BIG_INT=1
+else
+JX_BIG_INT_OPTION = -DJX_USING_BIG_INT=0
+endif
+
+ifdef JXF_USE_BIG_INT
+JXF_BIG_INT_OPTION = -DJXF_USING_BIG_INT=1
+else
+JXF_BIG_INT_OPTION = -DJXF_USING_BIG_INT=0
+endif
+
+ifdef JX_USE_BIG_DOUBLE
+JX_BIG_DOUBLE_OPTION = -DJX_USING_BIG_DOUBLE=1
+else
+JX_BIG_DOUBLE_OPTION = -DJX_USING_BIG_DOUBLE=0
+endif
+
+ifdef JXF_USE_BIG_DOUBLE
+JXF_BIG_DOUBLE_OPTION = -DJXF_USING_BIG_DOUBLE=1
+else
+JXF_BIG_DOUBLE_OPTION = -DJXF_USING_BIG_DOUBLE=0
+endif
+
+
+# MUMPS options
+ifdef JX_USE_MUMPS
+JX_MUMPS_OPTION = -DJX_USING_MUMPS=1
+libdir = $(topdir)/lib
+include $(topdir)/Makefile.inc
+MUMPS_INCLUDE_O = $(INCS)
+MUMPS_INCLUDE_T = -I$(topdir)/include
+MUMPS_INCLUDES = $(MUMPS_INCLUDE_O) $(MUMPS_INCLUDE_T)
+MUMPS_LIB_O = -L$(libdir) -ldmumps
+MUMPS_LIB_T = -L$(libdir) -lmumps_common
+MUMPS_LIBS = $(MUMPS_LIB_O) $(MUMPS_LIB_T) $(LORDERINGS) $(LIBS) $(LIBOTHERS)
+else
+JX_MUMPS_OPTION = -DJX_USING_MUMPS=0
+endif
+
+ifdef JXF_USE_MUMPS
+JXF_MUMPS_OPTION = -DJXF_USING_MUMPS=1
+libdir = $(topdir)/lib
+include $(topdir)/Makefile.inc
+MUMPS_INCLUDE_O = $(INCS)
+MUMPS_INCLUDE_T = -I$(topdir)/include
+MUMPS_INCLUDES = $(MUMPS_INCLUDE_O) $(MUMPS_INCLUDE_T)
+MUMPS_LIB_O = -L$(libdir) -ldmumps
+MUMPS_LIB_T = -L$(libdir) -lmumps_common
+MUMPS_LIBS = $(MUMPS_LIB_O) $(MUMPS_LIB_T) $(LORDERINGS) $(LIBS) $(LIBOTHERS)
+else
+JXF_MUMPS_OPTION = -DJXF_USING_MUMPS=0
+endif
+
+
+ifdef JX_USE_COMPLEX
+override JX_User_Optional_Parameters += -DJX_USING_COMPLEX=1
+endif
+ifdef JXF_USE_COMPLEX
+override JXF_User_Optional_Parameters += -DJXF_USING_COMPLEX=1
+endif
+
+# Handle HWLOC options
+ifdef USING_HWLOC
+  # Handle JX_USER_Optional_Parameters for JX
+  ifdef JX_REODER_SEND_RECV
+    override JX_User_Optional_Parameters += -DJX_REODER_SEND_RECV=1
+  else
+    override JX_User_Optional_Parameters += -DJX_REODER_SEND_RECV=0
+  endif
+  ifdef JX_REODER_SEND_CLOSER
+    override JX_User_Optional_Parameters += -DJX_REODER_SEND_CLOSER=1
+  endif
+  ifdef JX_REODER_RECV_CLOSER
+    override JX_User_Optional_Parameters += -DJX_REODER_RECV_CLOSER=1
+  endif
+  ifdef JX_hoAllreduce
+    override JX_User_Optional_Parameters += -DJX_hoAllreduce=1
+  endif
+
+  # Handle JXF_User_Optional_Parameters for JXF
+  ifdef JXF_REODER_SEND_RECV
+    override JXF_User_Optional_Parameters += -DJXF_REODER_SEND_RECV=1
+  else
+    override JXF_User_Optional_Parameters += -DJXF_REODER_SEND_RECV=0
+  endif
+  ifdef JXF_REODER_SEND_CLOSER
+    override JXF_User_Optional_Parameters += -DJXF_REODER_SEND_CLOSER=1
+  endif
+  ifdef JXF_REODER_RECV_CLOSER
+    override JXF_User_Optional_Parameters += -DJXF_REODER_RECV_CLOSER=1
+  endif
+  ifdef JXF_hoAllreduce
+    override JXF_User_Optional_Parameters += -DJXF_hoAllreduce=1
+  endif
+endif
+
+
+ifdef JX_MiniBranRAP
+override JX_User_Optional_Parameters += -DJX_MiniBranRAP=1
+endif
+ifdef JXF_MiniBranRAP
+override JXF_User_Optional_Parameters += -DJXF_MiniBranRAP=1
+endif
+
+
+ifdef JX_SplitRAP
+override JX_User_Optional_Parameters += -DJX_SplitRAP=1
+endif
+ifdef JXF_SplitRAP
+override JXF_User_Optional_Parameters += -DJXF_SplitRAP=1
+endif
+
+ifdef DEBUG_OPTION
+override C_COMPILE_OPTION += -g
+override F_COMPILE_OPTION += -g
+override C_COMPILE_FLAGS += -g
+override F_COMPILE_FLAGS += -g
+endif
+
+# 统一设置 C 和 Fortran 编译选项
+override C_COMPILE_OPTION += -O2 -Wall \
+                              ${JX_MPI_CP_OPTION} ${JX_OMP_CP_OPTION} ${JX_BIG_INT_OPTION} \
+                              ${JX_BIG_DOUBLE_OPTION} ${JX_User_Optional_Parameters} \
+                              ${JXF_MPI_CP_OPTION} ${JXF_OMP_CP_OPTION} ${JXF_BIG_INT_OPTION} \
+                              ${JXF_BIG_DOUBLE_OPTION} ${JXF_User_Optional_Parameters}
+override F_COMPILE_OPTION += -O2 -Wall
+
+# 统一设置 C 和 Fortran 编译标志
+override C_COMPILE_FLAGS += -fPIC -O2 -Wall
+override F_COMPILE_FLAGS += -fPIC -O2 -Wall
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# include
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# 包含目录
+JXPAMGINCLUDES = -I ${JXPAMGDIR}/include -I ${JXPAMGDIR}/fv_amg/include
+JXFPAMGINCLUDES = -I ${JXFPAMGDIR}/include -I ${JXFPAMGDIR}/fv_amg/include
+
+# MPI 和 HWLOC 处理
+ifdef JXPAMG_USE_MPI
+    MPIINCLUDES = -I ${MPIDIR}/include
+endif
+
+ifdef JXFPAMG_USE_MPI
+    MPIINCLUDES += -I ${MPIDIR}/include
+endif
+
+ifdef USING_HWLOC
+    HWLOCINCLUDES = -I ${HWLOC_DIR}/include
+endif
+
+
+HTINCLUDES     = -I $(HT_ROOT)/include  
+
+# 合并所有的包含目录
+AllCINCLUDES = ${JXPAMGINCLUDES} ${JXFPAMGINCLUDES} ${MPIINCLUDES} ${HWLOCINCLUDES} ${HTINCLUDES}
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# basic libs
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Math and C++ libraries
+MATHLIB = -lm
+CPPLIB  = -lstdc++
+
+# BLAS library (if MUMPS is used)
+ifdef JX_USE_MUMPS
+  BLAS_LIB = -lblas
+endif
+ifdef JXF_USE_MUMPS
+  BLAS_LIB = -lblas
+endif
+
+# LAPACK library (if LAPACK is used)
+ifdef JX_USE_LAPACK
+  LAPACK_LIB = -llapack
+endif
+ifdef JXF_USE_LAPACK
+  LAPACK_LIB = -llapack
+endif
+
+# MPI libraries (if MPI is used)
+ifdef JXPAMG_USE_MPI
+  MPILIB = -L ${MPIDIR}/lib -lmpi
+endif
+ifdef JXFPAMG_USE_MPI
+  MPILIB += -L ${MPIDIR}/lib -lmpi
+endif
+
+ifdef USING_HWLOC
+HWLOCLIB = -L ${HWLOC_DIR}/lib -lhwloc
+endif
+
+HTLIB = -L $(HT_ROOT)/lib -lhthread_host
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# libs for building jxpamg lib
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+LIBS2JXPAMG = ${MUMPS_LIBS} ${MPILIB} $(HTLIB) ${MATHLIB} ${CPPLIB} ${HWLOCLIB}
+
+CFLAGS = ${CDEFS} ${C_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
+FFLAGS = ${FDEFS} ${F_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# rules for compiling the source files
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+.c.o:
+	${CC} -o $@ -c ${CFLAGS} $<
+.f.o:
+	${FC} -o $@ -c ${FFLAGS} $<
+.for.o:
+	${FC} -o $@ -c ${FFLAGS} $<
+.f90.o:
+	${FC} -o $@ -c ${FFLAGS} $<
+
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# all libs for running programs
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+JXPAMGLIB  = -L ${JXPAMGDIR}/lib -lJXPAMG
+JXFPAMGLIB = -L ${JXFPAMGDIR}/lib -lJXFPAMG
+ALLLIBS    =  ${JXPAMGLIB} ${JXFPAMGLIB} ${LIBS2JXPAMG}

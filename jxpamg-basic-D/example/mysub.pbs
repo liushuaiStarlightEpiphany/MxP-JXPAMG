@@ -1,0 +1,27 @@
+#!/bin/bash -e
+#PBS -N RHD-1T
+#PBS -l nodes=1:ppn=28
+#PBS -l walltime=5:0:0
+#PBS -q short
+#PBS -o /public/home/li200029/2024-Feb/Feb-29/jxpamg-basic/example/sub.result
+#PBS -e /public/home/li200029/2024-Feb/Feb-29/jxpamg-basic/example/sub.erro
+
+
+
+
+export OMP_NUM_THREADS=1
+
+source /public/software/profile.d/mpi_intelmpi-2017.4.239.sh
+
+export TMI_CONFIG=$I_MPI_ROOT/intel64/etc/tmi.conf 
+export I_MPI_FALLBACK=1
+
+
+
+
+mpirun -PSM2 -hostfile $PBS_NODEFILE -np 28 /public/home/li200029/2024-Feb/Feb-29/jxpamg-basic/example/solver_strong -fromonecsrfile /public/home/li200029/matrix-20230730/RHD-1T.matrix -rhsfromfile /public/home/li200029/matrix-20230730/RHD-1T.rhs -rlx 6 -ct 8 -ipt 0 -sid 12 -agg_nl 2 -str 0.35 -tol 1e-10 -rt 5 -mxit 500 -ptlv 3
+
+
+
+
+
