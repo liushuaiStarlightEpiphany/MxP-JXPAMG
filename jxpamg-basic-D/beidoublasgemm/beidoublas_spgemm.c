@@ -25,13 +25,13 @@
 spgemm_algo_t spgemm_algo_from_env(void)
 {
     const char *env = getenv(SPGEMM_ALGO_ENV_VAR);
-    if (!env) return SPGEMM_ALGO_HASH;
+    if (!env) return SPGEMM_ALGO_DSP;
     if (strcasecmp(env, SPGEMM_ALGO_MERGE_STR) == 0) return SPGEMM_ALGO_MERGE;
     if (strcasecmp(env, SPGEMM_ALGO_MIX_STR)   == 0) return SPGEMM_ALGO_MIX;
     if (strcasecmp(env, SPGEMM_ALGO_ORG_STR)   == 0) return SPGEMM_ALGO_ORG;
     if (strcasecmp(env, SPGEMM_ALGO_SPA_STR)   == 0) return SPGEMM_ALGO_SPA;
     if (strcasecmp(env, SPGEMM_ALGO_DSP_STR)   == 0) return SPGEMM_ALGO_DSP;
-    return SPGEMM_ALGO_HASH;
+    return SPGEMM_ALGO_DSP;
 }
 
 const char* spgemm_algo_name(spgemm_algo_t algo)
