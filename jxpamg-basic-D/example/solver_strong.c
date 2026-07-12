@@ -119,6 +119,7 @@ main( int argc, char *argv[] )
    JX_Int       cycle_type;
    JX_Int       relax_type;
    JX_Int       spmt_rap_type = 1;
+   JX_Int       rap_control = 0;
    JX_Int       measure_type;
    JX_Int       rap2;
    JX_Int       num_functions;
@@ -325,6 +326,11 @@ main( int argc, char *argv[] )
       {
          arg_index ++;
          relax_type = atoi(argv[arg_index++]);
+      }
+      else if ( strcmp(argv[arg_index], "-rap") == 0 )
+      {
+         arg_index ++;
+         rap_control = atoi(argv[arg_index++]);
       }
       else if ( strcmp(argv[arg_index], "-ai_rlx") == 0 )
       {
@@ -574,6 +580,8 @@ main( int argc, char *argv[] )
          if (TTest) starttime = jx_MPI_Wtime();
          
          JX_PAMGCreate(&amg_solver);
+         if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
+         if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
          { char *env = getenv("SPMT_RAP_TYPE"); if (env) JX_PAMGSetSpMtRapType(amg_solver, atoi(env)); }
          if (restri_type)
          {
@@ -681,6 +689,8 @@ main( int argc, char *argv[] )
          
          { char *env = getenv("SPMT_RAP_TYPE"); if (env) JX_PAMGSetSpMtRapType(amg_solver, atoi(env)); }
          JX_PAMGCreate(&amg_solver);
+         if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
+         if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
          JX_PAMGSetMaxLevels(amg_solver, max_levels);
          JX_PAMGSetMaxIter(amg_solver, 1);
          JX_PAMGSetCycleType(amg_solver, cycle_type);
@@ -855,6 +865,8 @@ main( int argc, char *argv[] )
          { char *env = getenv("SPMT_RAP_TYPE"); if (env) JX_PAMGSetSpMtRapType(amg_solver, atoi(env)); }
          
          JX_PAMGCreate(&amg_solver);
+         if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
+         if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
          if (restri_type)
          {
             jx_assert(restri_type >= 0);
@@ -1097,6 +1109,8 @@ main( int argc, char *argv[] )
          if (TTest) starttime = jx_MPI_Wtime();
          
          JX_PAMGCreate(&amg_solver);
+         if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
+         if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
          JX_PAMGSetMaxLevels(amg_solver, max_levels);
          JX_PAMGSetMaxIter(amg_solver, 1);
          JX_PAMGSetCycleType(amg_solver, cycle_type);
