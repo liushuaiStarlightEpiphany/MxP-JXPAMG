@@ -7,8 +7,9 @@
 #include "jx_util.h"
 #include "hthread_host.h"
 
-JX_Int jx_malloc_type = 1;
 extern int myid;
+
+JX_Int malloc_type = 0;
 
 /*!
  * \fn JX_Int jx_OutOfMemory
@@ -35,7 +36,7 @@ char *
 jx_MAlloc(size_t size)
 {
    char *ptr;
-   switch (jx_malloc_type)
+   switch (malloc_type)
    {
    case 1:
       ptr = jx_MAlloc_MT(size);
@@ -103,10 +104,10 @@ jx_MAlloc_MT(size_t size)
 char *
 jx_CAlloc(size_t count, size_t elt_size)
 {
-   // JX_Int jx_malloc_type = 1;
+   // JX_Int malloc_type = 0;
 
    char *ptr;
-   switch (jx_malloc_type)
+   switch (malloc_type)
    {
    case 1:
       ptr = jx_CAlloc_MT(count, elt_size);
@@ -175,9 +176,9 @@ jx_CAlloc_MT(size_t count, size_t elt_size)
 char *
 jx_ReAlloc(char *ptr, size_t size)
 {
-   // JX_Int jx_malloc_type = 1;
+   // JX_Int malloc_type = 0;
 
-   switch (jx_malloc_type)
+   switch (malloc_type)
    {
    case 1:
       ptr = jx_ReAlloc_MT(ptr, size);
@@ -269,7 +270,7 @@ jx_ReAlloc_v2(void *ptr, size_t old_size, size_t new_size)
  */
 void jx_Free(char *ptr)
 {
-   switch (jx_malloc_type)
+   switch (malloc_type)
    {
    case 1:
       jx_Free_MT(ptr);

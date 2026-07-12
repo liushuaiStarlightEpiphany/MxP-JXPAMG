@@ -555,8 +555,163 @@ jx_CSRMatrixMultiply( jx_CSRMatrix *A, jx_CSRMatrix *B )
    }
    jx_TFree(B_marker);
   } /*end parallel region */
-  jx_TFree(jj_count);
-  return C;
+   jx_TFree(jj_count);
+   return C;
+}
+
+/*!
+ * \fn jx_CSRMatrix *jx_CSRMatrixMultiplySymbolic
+ * \brief Only compute the symbolic structure (i, j) of C = A * B, data = 0.
+ * \date 2026/07/03
+ */
+jx_CSRMatrix *
+jx_CSRMatrixMultiplySymbolic( jx_CSRMatrix *A, jx_CSRMatrix *B )
+{
+   JX_Int    *A_i      = jx_CSRMatrixI(A);
+   JX_Int    *A_j      = jx_CSRMatrixJ(A);
+   JX_Int     nrows_A  = jx_CSRMatrixNumRows(A);
+   JX_Int     ncols_A  = jx_CSRMatrixNumCols(A);
+   JX_Int    *B_i      = jx_CSRMatrixI(B);
+   JX_Int    *B_j      = jx_CSRMatrixJ(B);
+   JX_Int     ncols_B  = jx_CSRMatrixNumCols(B);
+
+   jx_CSRMatrix *C;
+   JX_Int          *C_i;
+   JX_Int          *C_j;
+
+   JX_Int    ia, ib, ic, ja, jb, num_nonzeros=0;
+   JX_Int    allsquare = 0;
+   JX_Int    max_num_threads;
+   JX_Int   *jj_count;
+
+   if (ncols_A != jx_CSRMatrixNumRows(B))
+   {
+      jx_printf("Warning! incompatible matrix dimensions!\n");
+      return NULL;
+   }
+
+   if (nrows_A == ncols_B) allsquare = 1;
+
+   C_i = jx_CTAlloc(JX_Int, nrows_A+1);
+   max_num_threads = jx_NumThreads();
+   jj_count = jx_CTAlloc(JX_Int, max_num_threads);
+
+#if JX_USING_OPENMP
+#pragma omp parallel private(ia, ib, ic, ja, jb, num_nonzeros)
+#endif
+   {
+    JX_Int *B_marker = NULL;
+    JX_Int ns, ne, ii, jj;
+    JX_Int size, rest, num_threads;
+    JX_Int i1;
+    ii = jx_GetThreadNum();
+    num_threads = jx_NumActiveThreads();
+
+   size = nrows_A/num_threads;
+   rest = nrows_A - size*num_threads;
+    if (ii < rest)
+    {
+       ns = ii*size+ii;
+       ne = (ii+1)*size+ii+1;
+    }
+    else
+    {
+       ns = ii*size+rest;
+       ne = (ii+1)*size+rest;
+    }
+
+    B_marker = jx_CTAlloc(JX_Int, ncols_B);
+    for (ib = 0; ib < ncols_B; ib++)
+      B_marker[ib] = -1;
+
+    num_nonzeros = 0;
+    for (ic = ns; ic < ne; ic++)
+    {
+        C_i[ic] = num_nonzeros;
+        if (allsquare)
+        {
+           B_marker[ic] = ic;
+           num_nonzeros++;
+        }
+        for (ia = A_i[ic]; ia < A_i[ic+1]; ia++)
+        {
+           ja = A_j[ia];
+           for (ib = B_i[ja]; ib < B_i[ja+1]; ib++)
+           {
+              jb = B_j[ib];
+              if (B_marker[jb] != ic)
+              {
+                 B_marker[jb] = ic;
+                 num_nonzeros++;
+              }
+           }
+        }
+    }
+    jj_count[ii] = num_nonzeros;
+
+#if JX_USING_OPENMP
+#pragma omp barrier
+#endif
+
+    if (ii)
+    {
+       jj = jj_count[0];
+       for (i1 = 1; i1 < ii; i1++)
+          jj += jj_count[i1];
+       for (i1 = ns; i1 < ne; i1++)
+          C_i[i1] += jj;
+    }
+    else
+    {
+       C_i[nrows_A] = 0;
+       for (i1 = 0; i1 < num_threads; i1++)
+          C_i[nrows_A] += jj_count[i1];
+       C = jx_CSRMatrixCreate(nrows_A, ncols_B, C_i[nrows_A]);
+       jx_CSRMatrixI(C) = C_i;
+       jx_CSRMatrixInitialize(C);
+       C_j = jx_CSRMatrixJ(C);
+    }
+
+#if JX_USING_OPENMP
+#pragma omp barrier
+#endif
+
+    for (ib = 0; ib < ncols_B; ib++)
+       B_marker[ib] = -1;
+
+    {
+    JX_Int counter, row_start;
+    counter = C_i[ns];
+    for (ic = ns; ic < ne; ic++)
+    {
+       row_start = C_i[ic];
+       if (allsquare)
+       {
+          B_marker[ic] = counter;
+          C_j[counter] = ic;
+          counter++;
+       }
+       for (ia = A_i[ic]; ia < A_i[ic+1]; ia++)
+       {
+          ja = A_j[ia];
+          for (ib = B_i[ja]; ib < B_i[ja+1]; ib++)
+          {
+             jb = B_j[ib];
+             if (B_marker[jb] < row_start)
+             {
+                B_marker[jb] = counter;
+                C_j[B_marker[jb]] = jb;
+                counter++;
+             }
+          }
+       }
+    }
+    }
+
+    jx_TFree(B_marker);
+   }
+   jx_TFree(jj_count);
+   return C;
 }
 
 /*!

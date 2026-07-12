@@ -15,7 +15,7 @@
 # JXPAMG directory and MPI diectory
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-JXPAMGDIR  = /vol8/home/xtu_pcy/TH-MXP-JXPAMG/jxpamg-basic-D
+JXPAMGDIR  = /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/jxpamg-basic-D
 
 JXPAMG_USE_MPI = YES
 ifdef JXPAMG_USE_MPI
@@ -207,13 +207,16 @@ HWLOCINCLUDES    = -I ${HWLOC_DIR}/include
 endif
 
 HTINCLUDES     = -I $(HT_ROOT)/include  
-AllCINCLUDES   = ${JXPAMGINCLUDES} ${MPIINCLUDES} ${HWLOCINCLUDES} ${HTINCLUDES}
+BEIDOUDIR    = /vol8/home/xtu_pcy/l_s/BeidouBLAS_unified
+AllCINCLUDES   = ${JXPAMGINCLUDES} ${MPIINCLUDES} ${BEIDOUBLASINCLUDES} ${HWLOCINCLUDES} ${HTINCLUDES}
+BEIDOUBLASINCLUDES = -I ${BEIDOUDIR}/include -I ${BEIDOUDIR}/dsp/spgemm_include -I $(JXPAMGDIR)/beidoublasgemm
 
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # basic libs
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 MATHLIB = -lm
 CPPLIB  = -lstdc++
+BEIDOUBLASLIB = -L ${BEIDOUDIR}/lib -lbeidouBLAS
 ifdef JX_USE_MUMPS
 BLAS_LIB = -lblas
 endif
@@ -237,7 +240,7 @@ HTLIB = -L $(HT_ROOT)/lib -lhthread_host
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # libs for building jxpamg lib
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-LIBS2JXPAMG = ${MUMPS_LIBS} ${MPILIB} $(HTLIB) ${MATHLIB} ${CPPLIB} ${HWLOCLIB}
+LIBS2JXPAMG = ${MPILIB} ${MATHLIB} ${CPPLIB}
 
 CFLAGS = ${CDEFS} ${C_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
 FFLAGS = ${FDEFS} ${F_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
@@ -258,4 +261,4 @@ FFLAGS = ${FDEFS} ${F_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
 # all libs for running programs
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 JXPAMGLIB  = -L ${JXPAMGDIR}/lib -lJXPAMG
-ALLLIBS    =  ${JXPAMGLIB} ${LIBS2JXPAMG}
+ALLLIBS    =  ${JXPAMGLIB} ${LIBS2JXPAMG} -L ${BEIDOUDIR}/lib $(JXPAMGDIR)/beidoublasgemm/beidoublas_spgemm.o $(JXPAMGDIR)/spgemm_adapter.o -lbeidouBLAS ${HTLIB}

@@ -149,3 +149,17 @@ help:
 	@echo " make tar      : back up the current JXPAMG package "
 	@echo " make help     : show this screen "
 	@echo " "
+
+# ============================================================
+# BeidouBLAS SpGEMM adapter
+# ============================================================
+BEIDOUDIR    = /vol8/home/xtu_pcy/l_s/BeidouBLAS_unified
+BDIR         = $(JXPAMGDIR)/beidoublasgemm
+BEIDOUBLAS_INCLUDES = -I $(BDIR) -I $(BEIDOUDIR)/include -I $(BEIDOUDIR)/dsp/spgemm_include
+BEIDOUBLAS_LIB = -L $(BEIDOUDIR)/lib -lbeidouBLAS
+
+$(BDIR)/beidoublas_spgemm.o: $(BDIR)/beidoublas_spgemm.c
+	$(CC) -o $@ -c $(CFLAGS) $(BEIDOUBLAS_INCLUDES) $(BEIDOUBLAS_LIB) $<
+
+spgemm_adapter.o: spgemm_adapter.c
+	$(CC) -o $@ -c $(CFLAGS) $(BEIDOUBLAS_INCLUDES) $<

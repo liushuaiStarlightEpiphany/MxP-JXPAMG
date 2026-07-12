@@ -25,6 +25,21 @@
  *----------------------------------------------------------------*/
 
 typedef struct jx_SpMVPrecondFP64Data_struct jx_SpMVPrecondFP64Data;
+typedef struct jx_Relax103ColorData_struct
+{
+   JX_Int *jlev;
+   JX_Int *ilev;
+   JX_Int nlev;
+
+   JX_Int num_rows;
+   JX_Int num_nonzeros;
+   JX_Int *A_i;
+   JX_Int *A_j;
+   JX_Real *A_data;
+
+   void *spmv_data;
+   void (*spmv_data_destroy)(void *);
+} jx_Relax103ColorData;
 
 /*!
  * \struct jx_Vector
@@ -64,6 +79,7 @@ typedef struct
    JX_Int owns_data;
 
    jx_SpMVPrecondFP64Data *spmv_precond_fp64;
+   jx_Relax103ColorData *relax103_color_data;
 
 } jx_CSRMatrix;
 
@@ -77,17 +93,18 @@ typedef struct
 #define jx_CSRMatrixNumRownnz(matrix) ((matrix)->num_rownnz)
 #define jx_CSRMatrixOwnsData(matrix) ((matrix)->owns_data)
 #define jx_CSRMatrixSpMVPrecondFP64(matrix) ((matrix)->spmv_precond_fp64)
+#define jx_CSRMatrixRelax103ColorData(matrix) ((matrix)->relax103_color_data)
 
 #define JX_USING_PERSISTENT_COMM
 #ifdef JX_USING_PERSISTENT_COMM
-typedef enum CommPkgJobType
+typedef enum JX_CommPkgJobType
 {
    JX_COMM_PKG_JOB_COMPLEX = 0,
    JX_COMM_PKG_JOB_COMPLEX_TRANSPOSE,
    JX_COMM_PKG_JOB_INT,
    JX_COMM_PKG_JOB_INT_TRANSPOSE,
-   NUM_OF_COMM_PKG_JOB_TYPE
-} CommPkgJobType;
+   JX_NUM_OF_COMM_PKG_JOB_TYPE
+} JX_CommPkgJobType;
 
 typedef struct
 {
@@ -131,7 +148,7 @@ typedef struct
    JX_Int *recv_reorder_map;
 #endif
 #ifdef JX_USING_PERSISTENT_COMM
-   jx_ParCSRPersistentCommHandle *persistent_comm_handles[NUM_OF_COMM_PKG_JOB_TYPE];
+   jx_ParCSRPersistentCommHandle *persistent_comm_handles[JX_NUM_OF_COMM_PKG_JOB_TYPE];
 #endif
 
 } jx_ParCSRCommPkg;
@@ -618,7 +635,6 @@ JX_Int jx_CSRMatrixPrint(jx_CSRMatrix *matrix, char *file_name);
 jx_CSRMatrix *jx_CSRMatrixRead(char *file_name, JX_Int file_base);
 jx_CSRMatrix *jx_CSRMatrixRead3(char *file_name);
 jx_CSRMatrix *jx_CSRMatrixBinaryRead(char *file_name);
-jx_CSRMatrix *jx_CSRMatrixBinaryRead_SuiteSparse(char *file_name);
 jx_CSRMatrix *jx_CSRMatrixBinaryRead_FASP(char *file_name);
 jx_CSRMatrix *jx_CSRMatrixRead2(char *file_name, JX_Int file_base);
 JX_Int jx_CSRMatrixCopy(jx_CSRMatrix *A, jx_CSRMatrix *B, JX_Int copy_data);
@@ -635,6 +651,7 @@ void jx_CSRMatrixReorderColumnNumber12(jx_CSRMatrix *A);
 void jx_CSRMatrixReorderColumnNumberAll(jx_CSRMatrix *A);
 jx_CSRMatrix *jx_CSRMatrixAdd(jx_CSRMatrix *A, jx_CSRMatrix *B);
 jx_CSRMatrix *jx_CSRMatrixMultiply(jx_CSRMatrix *A, jx_CSRMatrix *B);
+jx_CSRMatrix *jx_CSRMatrixMultiplySymbolic( jx_CSRMatrix *A, jx_CSRMatrix *B );
 void jx_CSRMatrixScale(jx_CSRMatrix *A, JX_Real alpha);
 jx_CSRMatrix *jx_CSRMatrixSymmetrization(jx_CSRMatrix *A);
 jx_CSRMatrix *jx_CSRMatrixMGReorderByVariables(jx_CSRMatrix *A, JX_Int num_groups);
@@ -646,7 +663,9 @@ JX_Int jx_SeqVectorSetDataOwner(jx_Vector *vector, JX_Int owns_data);
 JX_Int jx_SeqVectorDestroy(jx_Vector *vector);
 JX_Int jx_SeqVectorCopy(jx_Vector *x, jx_Vector *y);
 JX_Int jx_SeqVectorSetConstantValues(jx_Vector *x, JX_Real value);
-JX_Real jx_SeqVectorInnerProd(jx_Vector *x, jx_Vector *y);
+JX_Real jx_SeqVectorInnerProd(jx_Vector *x, jx_Vector *y, JX_Int myid);
+JX_Real jx_SeqVectorInnerProd_origin(jx_Vector *x, jx_Vector *y);
+JX_Real jx_SeqVectorInnerProd_TH(jx_Vector *x, jx_Vector *y, JX_Int myid);
 JX_Int jx_SeqVectorPrint(jx_Vector *vector, char *file_name);
 JX_Int jx_SeqVectorAxpy(JX_Real alpha, jx_Vector *x, jx_Vector *y);
 JX_Int jx_SeqVectorMassDotpTwo(jx_Vector *x, jx_Vector *y, jx_Vector **z, JX_Int k, JX_Int unroll, JX_Real *result_x, JX_Real *result_y);
@@ -678,6 +697,7 @@ jx_CSRMatrixMatvec(JX_Real alpha,
                    JX_Real beta,
                    jx_Vector *y,
                    JX_Int myid);
+
 JX_Int
 jx_CSRMatrixMatvec_origin(JX_Real alpha,
                           jx_CSRMatrix *A,
@@ -692,6 +712,7 @@ jx_CSRMatrixMatvec_baseline(JX_Real alpha,
                             JX_Real beta,
                             jx_Vector *y,
                             JX_Int myid);
+
 JX_Int
 jx_CSRMatrixMatvec_v1(JX_Real alpha,
                       jx_CSRMatrix *A,
@@ -699,6 +720,7 @@ jx_CSRMatrixMatvec_v1(JX_Real alpha,
                       JX_Real beta,
                       jx_Vector *y,
                       JX_Int myid);
+
 JX_Int
 jx_CSRMatrixMatvec_v2(JX_Real alpha,
                       jx_CSRMatrix *A,
@@ -706,6 +728,7 @@ jx_CSRMatrixMatvec_v2(JX_Real alpha,
                       JX_Real beta,
                       jx_Vector *y,
                       JX_Int myid);
+
 JX_Int
 jx_CSRMatrixMatvecOutOfPlace(JX_Real alpha,
                              jx_CSRMatrix *A,
@@ -1462,6 +1485,49 @@ jx_PAMGRelax7(jx_ParCSRMatrix *par_matrix,
               JX_Real omega,
               jx_ParVector *par_app,
               jx_ParVector *Vtemp);
+
+/* csrc/operation/relaxations/par_relax_100.c */
+JX_Int
+jx_PAMGRelax100(jx_ParCSRMatrix *par_matrix,
+                jx_ParVector *par_rhs,
+                JX_Int *cf_marker,
+                JX_Int relax_points,
+                JX_Real relax_weight,
+                JX_Real omega,
+                jx_ParVector *par_app,
+                jx_ParVector *Vtemp);
+/* csrc/operation/relaxations/par_relax_103.c */
+JX_Int
+jx_PAMGRelax103(jx_ParCSRMatrix *par_matrix,
+                jx_ParVector *par_rhs,
+                JX_Int *cf_marker,
+                JX_Int relax_points,
+                JX_Real relax_weight,
+                JX_Real omega,
+                jx_ParVector *par_app,
+                jx_ParVector *Vtemp);
+void jx_Relax103ColorDataDestroy(jx_Relax103ColorData *color_data);
+JX_Int
+jx_Relax103ColorMatvec(jx_Relax103ColorData *color_data,
+                       JX_Int color,
+                       jx_Vector *x,
+                       jx_Vector *y,
+                       JX_Int myid);
+JX_Int
+jx_Relax103GetColoring(jx_CSRMatrix *A,
+                       JX_Int **jlev_ptr,
+                       JX_Int **ilev_ptr,
+                       JX_Int *nlev_ptr);
+/* csrc/operation/relaxations/par_relax_106.c */
+JX_Int
+jx_PAMGRelax106(jx_ParCSRMatrix *par_matrix,
+                jx_ParVector *par_rhs,
+                JX_Int *cf_marker,
+                JX_Int relax_points,
+                JX_Real relax_weight,
+                JX_Real omega,
+                jx_ParVector *par_app,
+                jx_ParVector *Vtemp);
 JX_Int
 jx_PAMGRelaxAI7(jx_ParCSRMatrix *par_matrix,
                 jx_ParVector *par_rhs,
