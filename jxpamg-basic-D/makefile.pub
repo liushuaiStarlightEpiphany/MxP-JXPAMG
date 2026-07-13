@@ -208,7 +208,11 @@ endif
 
 HTINCLUDES     = -I $(HT_ROOT)/include  
 BEIDOUDIR    = /vol8/home/xtu_pcy/l_s/BeidouBLAS_unified
-AllCINCLUDES   = ${JXPAMGINCLUDES} ${MPIINCLUDES} ${BEIDOUBLASINCLUDES} ${HWLOCINCLUDES} ${HTINCLUDES}
+PANGULU_DIR  = /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/pangulu-20251020--/final_test/PanguLU-mixprecision
+ENV_DIR      = /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/pangulu-20251020--/final_test/PanguLU_env
+PANGULU_INCLUDES = -I $(PANGULU_DIR)/include -I $(PANGULU_DIR)/examples
+PANGULU_LIB  = $(PANGULU_DIR)/lib/libpangulu.a $(ENV_DIR)/lib/libopenblas.a $(ENV_DIR)/lib/libmetis.a $(ENV_DIR)/lib/libGKlib.a
+AllCINCLUDES   = ${JXPAMGINCLUDES} ${MPIINCLUDES} ${BEIDOUBLASINCLUDES} ${PANGULU_INCLUDES} ${HWLOCINCLUDES} ${HTINCLUDES}
 BEIDOUBLASINCLUDES = -I ${BEIDOUDIR}/include -I ${BEIDOUDIR}/dsp/spgemm_include -I $(JXPAMGDIR)/beidoublasgemm
 
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -261,4 +265,4 @@ FFLAGS = ${FDEFS} ${F_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
 # all libs for running programs
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 JXPAMGLIB  = -L ${JXPAMGDIR}/lib -lJXPAMG
-ALLLIBS    =  ${JXPAMGLIB} ${LIBS2JXPAMG} -L ${BEIDOUDIR}/lib $(JXPAMGDIR)/beidoublasgemm/beidoublas_spgemm.o $(JXPAMGDIR)/spgemm_adapter.o -lbeidouBLAS ${HTLIB}
+ALLLIBS    =  ${JXPAMGLIB} ${LIBS2JXPAMG} ${PANGULU_LIB} -L ${BEIDOUDIR}/lib $(JXPAMGDIR)/beidoublasgemm/beidoublas_spgemm.o $(JXPAMGDIR)/spgemm_adapter.o -lbeidouBLAS ${HTLIB}

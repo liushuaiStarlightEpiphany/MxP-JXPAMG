@@ -10,6 +10,7 @@
  */ 
 
 #include "jx_pamg.h"
+extern JX_Int jx_hpPAMGRelax109( jx_hpCSRMatrix *hp_matrix, jx_ParVector *par_rhs, JX_Int *cf_marker, JX_Int relax_points, JX_Real relax_weight, JX_Real omega, jx_ParVector *par_app, jx_ParVector *Vtemp );
 JX_Int  
 jx_hpPAMGRelax( jx_hpCSRMatrix *hp_matrix,
               jx_ParVector    *par_rhs,
@@ -105,7 +106,7 @@ jx_hpPAMGRelax( jx_hpCSRMatrix *hp_matrix,
    }
    else if (relax_type == 109)
    {
-      relax_error = jx_Mumps(hp_matrix, par_rhs, par_app);
+      relax_error = jx_hpPAMGRelax109(hp_matrix, par_rhs, cf_marker, relax_points, relax_weight, omega, par_app, Vtemp);
    }
    return(relax_error); 
 }

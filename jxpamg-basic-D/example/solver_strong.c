@@ -58,7 +58,6 @@
 #include "jx_pamg.h"
 #include "jx_krylov.h"
 #include "jx_diagscale.h"
-#include "hthread_host.h"
 #include "jx_blockprec.h"
 #include "jx_euclid.h"
 #include "jx_combined.h"
@@ -176,8 +175,9 @@ main( int argc, char *argv[] )
    //--------------------------
    //  启动 MPI
    //--------------------------
-   jx_MPI_Init(&argc, &argv);
    hthread_dev_open(0);
+   hthread_dat_load(0, "/vol8/home/xtu_pcy/l_s/pangulu/pangulu2/kernel.dat");
+   jx_MPI_Init(&argc, &argv);
    jx_MPI_Comm_rank(comm, &myid);
    jx_MPI_Comm_size(comm, &nprocs);
    #ifdef USING_HWLOC
