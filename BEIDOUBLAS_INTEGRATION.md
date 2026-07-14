@@ -127,3 +127,165 @@ SPMT_RAP_TYPE=7 SPGEMM_ALGO=hash yhrun --mpi=pmix -n 1 ./solver_strong -nts 1 -p
 - **内存管理**：`memory.c` 中 `malloc_type=0` 改用标准 malloc。如需 MT3000 硬件加速，改回 `malloc_type=1` 并在有 hthreads 设备的节点上运行。
 - **单进程限制**：type=3 和 type=7 当前仅支持 `num_procs == 1`，多进程时回退 KT。
 - **运行时库路径**：需设置 `LD_LIBRARY_PATH` 包含 BeidouBLAS 和 hthreads 库。
+
+---
+
+# PanguLU 接入文档 — jxpamg-basic-D
+
+## 概述
+
+将 **PanguLU**（MT3000 平台混合精度稀疏 LU 直接求解器）集成到 AMG V-cycle 的**最粗层**，替代原有的高斯消去（`relax_type=9`），通过 `-rlx 109` 参数控制。
+
+## 文件结构（新增/修改）
+
+```
+MxP-JXPAMG/jxpamg-basic-D/
+├── csrc/amg/
+│   ├── par_cycle.c                   ◆ 修改：>=90 排除 relax_type=109
+│   └── par_relax.c                   ◆ 修改：case 109 → jx_hpPAMGRelax109
+│
+├── csrc/operation/relaxations/
+│   ├── par_relax_109.c               ★ 新增：PanguLU 粗层求解器实现
+│   ├── pangulu_interface.h           ★ 新增：PanguLU-JXPAMG 接口头文件
+│   └── pangulu_interface_impl.c      ★ 新增：接口实现（缓存、初始化、求解）
+│
+├── csrc/utilities/memory.c           ◆ 修改：malloc_type 恢复为 1(hthread_malloc)
+│
+├── example/
+│   ├── solver_strong.c               ◆ 修改：file_base 自动检测 .bin；hthread 提前初始化；-rlx 109 三元式
+│   ├── kernel.dat                    ★ 运行时：PanguLU GEMM 内核
+│   └── mt_device.dat                 ★ 运行时：DSP 设备内核
+│
+└── makefile.pub                      ◆ 修改：添加 PanguLU 库及头文件路径
+```
+
+## 修改清单
+
+### 1. `par_cycle.c` — relax_type >= 90 排除 109
+
+```c
+// 修改前：
+if (relax_type >= 90) { relax_type -= 90; ... }
+// 修改后：
+if (relax_type >= 90 && relax_type != 109) { relax_type -= 90; ... }
+```
+
+防止 `relax_type=109` 被误当作 AI 磨光路径（减去 90 后变成 type=19）。
+
+### 2. `par_relax.c` — case 109 分发到 PanguLU
+
+```c
+// 修改前：
+relax_error = jx_Mumps(hp_matrix, par_rhs, par_app);
+// 修改后：
+relax_error = jx_hpPAMGRelax109(hp_matrix, par_rhs, cf_marker,
+                                relax_points, relax_weight, omega,
+                                par_app, Vtemp);
+```
+
+新增 extern 声明 `jx_hpPAMGRelax109`。
+
+### 3. 新增文件
+
+**`par_relax_109.c`**：从 `par_relax_9.c` 复制并适配，内部调用 `pangulu_interface_impl.c` 的 `jx_pglu_ensure_factorized`（LU 分解）和 `jx_pglu_solve`（回代）。
+
+**`pangulu_interface.h`**：声明 `jx_pglu_ensure_factorized`、`jx_pglu_solve`、`jx_pglu_release`。
+
+**`pangulu_interface_impl.c`**：PanguLU 函数封装，负责：
+- CSR 矩阵数据补零对齐（padding）
+- 调用 `pangulu_init` / `pangulu_gstrf`（分解）/ `pangulu_gstrs`（回代）
+- 缓存已分解的矩阵（按指纹 `fingerprint` 复用）
+
+### 4. `solver_strong.c` — 运行时参数
+
+**file_base 自动检测**：命令行传入 `.bin` 文件时自动设 `file_base=2`（二进制格式），解决 `file_base=0` 时读取 `.bin` 崩溃的问题。
+
+**hthread 提前初始化**：`hthread_dev_open` 和 `hthread_dat_load` 移到 `jx_MPI_Init` 之前，确保 DSP 设备在最前面初始化。
+
+**`-rlx 109` 三元式**：
+```c
+JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 1);  // down = hSGS
+JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 2);  // up = hSGS
+JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 109 : 9, 3);         // coarsest = PanguLU
+```
+
+### 5. `memory.c` — malloc_type
+
+```c
+// BeidouBLAS 集成时改为 0（标准 malloc）
+// PanguLU 集成时恢复为 1（hthread_malloc），因 PanguLU 运行在 DSP 上需要 hthread 分配
+JX_Int malloc_type = 1;
+```
+
+## 编译方式
+
+```bash
+export PATH=/vol8/appsoftware/mpi-x/bin:$PATH
+cd /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/jxpamg-basic-D
+
+# 完全重建（清空所有 .o）
+rm -f lib/libJXPAMG.a
+find . -name "*.o" -delete
+
+# 编译库
+make -j4
+
+# 编译适配器对象
+make beidoublasgemm/beidoublas_spgemm.o spgemm_adapter.o
+
+# 编译求解器
+cd example
+make -j4
+```
+
+## 运行时
+
+```bash
+export PATH=/vol8/appsoftware/mpi-x/bin:$PATH
+export LD_LIBRARY_PATH=/vol8/home/xtu_pcy/l_s/BeidouBLAS_unified/lib:/vol8/appsoftware/mpi-x/lib:/vol8/appsoftware/mt3000_programming_env/hthreads/lib
+
+# 运行时内核文件（复制到工作目录一次即可）
+# cp /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/pangulu-20251020--/final_test/PanguLU-mixprecision/examples/mt_device.dat .
+# cp /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/kernel.dat .
+
+# rlx=6：GE 粗层（参考基准）
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
+  -fromonecsrfile /vol8/home/xtu_pcy/matrix/Constant/mat_csr_128X128X128.bin \
+  -rhsfromfile /vol8/home/xtu_pcy/matrix/Constant/rhs_128X128X128.bin \
+  -sid 0 -ipt 0 -rlx 6
+
+# rlx=109：PanguLU 粗层（纯 PAMG）
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
+  -fromonecsrfile /vol8/home/xtu_pcy/matrix/Constant/mat_csr_128X128X128.bin \
+  -rhsfromfile /vol8/home/xtu_pcy/matrix/Constant/rhs_128X128X128.bin \
+  -sid 0 -ipt 0 -rlx 109
+
+# GMRES(50) + 内置 RAP（rap=2）+ PanguLU 粗层
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
+  -fromonecsrfile /vol8/home/xtu_pcy/matrix/Constant/mat_csr_128X128X128.bin \
+  -rhsfromfile /vol8/home/xtu_pcy/matrix/Constant/rhs_128X128X128.bin \
+  -sid 0 -ipt 0 -rlx 109 -rap 2
+
+# 使用 BeidouBLAS SpGEMM RAP + PanguLU 粗层
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
+  -fromonecsrfile /vol8/home/xtu_pcy/matrix/Constant/mat_csr_128X128X128.bin \
+  -rhsfromfile /vol8/home/xtu_pcy/matrix/Constant/rhs_128X128X128.bin \
+  -sid 0 -ipt 0 -rlx 109 -rap 102
+```
+
+## 验证结果
+
+| 模式 | 粗层求解器 | 求解时间 | 总时间 | 残差 | 状态 |
+|------|-----------|---------|-------|------|------|
+| sid=0 rlx=6 | GE | — | ~70s | 1.02e-11 | ✅ 参考基准 |
+| sid=0 rlx=109 | PanguLU | 63.73s | 99.67s | **5.18e-11** | ✅ 正确收敛 |
+| sid=22 rlx=6 | GE | 33.28s | 69.22s | 1.02e-11 | ✅ |
+| sid=22 rlx=109 | PanguLU | — | — | 7.70e-02 | ⚠️ GMRES 假收敛 |
+
+## 注意事项
+
+- **GMRES 假收敛**：标准右预处理 GMRES（`-sid 22`）配合 PanguLU 粗层时，因 DSP 混合精度运算引入的微小非线性导致"假收敛 2"。建议使用纯 PAMG（`-sid 0`）搭配 PanguLU，或改用 FGMRES（JXPAMG 暂未支持）。
+- **运行时内核文件**：PanguLU 需要 `mt_device.dat`（DSP 设备内核）和 `kernel.dat`（GEMM 内核），需放在工作目录。从 PanguLU 安装目录复制一次即可。
+- **hthread 初始化**：`hthread_dev_open` 必须在 `MPI_Init` 之前调用，确保 DSP 设备在 MPI 初始化前准备好。
+- **内存模式**：`malloc_type=1`（hthread_malloc），所有 JXPAMG 内存分配通过 hthread。如无 DSP 设备需回退，改 `memory.c` 中 `malloc_type=0`。
+- **PanguLU 路径**：`makefile.pub` 中 `PANGULU_DIR` 和 `ENV_DIR` 指向 PanguLU 安装位置，按实际部署修改。

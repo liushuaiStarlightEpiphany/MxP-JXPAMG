@@ -396,7 +396,7 @@ jx_hpPAMGCycle(void *amg_vdata,
           * Do the relaxation num_sweep times
           *-----------------------------------------------------------------*/
 
-         if (relax_type >= 90)
+         if (relax_type >= 90 && relax_type != 109)
          {
 
             relax_type = relax_type - 90;

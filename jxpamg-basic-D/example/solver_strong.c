@@ -58,6 +58,7 @@
 #include "jx_pamg.h"
 #include "jx_krylov.h"
 #include "jx_diagscale.h"
+#include "hthread_host.h"
 #include "jx_blockprec.h"
 #include "jx_euclid.h"
 #include "jx_combined.h"
@@ -72,14 +73,14 @@ JX_Int
 jx_SeqVectorSetRandomValues( jx_Vector *x, JX_Int seed );
 
 JX_Int jx_spmv_type = 0;
-int myid = 0;
 JX_Int coreNums = 1;
+JX_Int myid = 0;
 JX_Int jx_dot_type = 0;
 
 main( int argc, char *argv[] )
 {
    MPI_Comm     comm = MPI_COMM_WORLD;
-   JX_Int       myid, nprocs;
+   JX_Int       nprocs;
 #if JX_USING_OPENMP || defined (JX_USING_PGCC_SMP)
    JX_Int       nthreads;
 #endif
@@ -176,8 +177,9 @@ main( int argc, char *argv[] )
    //  启动 MPI
    //--------------------------
    hthread_dev_open(0);
-   hthread_dat_load(0, "/vol8/home/xtu_pcy/l_s/pangulu/pangulu2/kernel.dat");
+   hthread_dat_load(0, "kernel.dat");
    jx_MPI_Init(&argc, &argv);
+
    jx_MPI_Comm_rank(comm, &myid);
    jx_MPI_Comm_size(comm, &nprocs);
    #ifdef USING_HWLOC
@@ -463,6 +465,7 @@ main( int argc, char *argv[] )
    {
       MatFile  = argv[build_matrix_arg_index];
       file_base = 0; 
+      if (strstr(MatFile, ".bin")) file_base = 2;
    }
    else if(problem_id < 0)
    {
@@ -539,7 +542,7 @@ main( int argc, char *argv[] )
    if (TTest) starttime = jx_MPI_Wtime();
    
    hp_matrix  = jx_hpBuildMatParFromOneFile(MatFile, 1, file_base);
-   par_rhs    = jx_hpBuildRhsParFromOneFile(RhsFile, hp_matrix, 0);
+   par_rhs    = jx_hpBuildRhsParFromOneFile(RhsFile, hp_matrix, file_base);
 
    if (!GusFile)
    {
@@ -617,9 +620,9 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
-         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);           /* relax_type for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 109 : 9, 3);         /* relax_type for "coarsest" */
          //------------------------------------------------------------
          //    JX_PAMG Setup
          //------------------------------------------------------------
@@ -715,9 +718,9 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
-         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);           /* relax_type for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 109 : 9, 3);         /* relax_type for "coarsest" */
          JX_PCGCreate(comm, &solver);
          
          JX_PCGSetMaxIter(solver, max_iter);
@@ -898,9 +901,9 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
-         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);           /* relax_type for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 109 : 9, 3);         /* relax_type for "coarsest" */
 
          JX_GMRESCreate(comm, &solver);
          JX_GMRESSetKDim(solver, k_dim);
@@ -1134,9 +1137,9 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);  /* relax_type for "down" */
-         JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);  /* relax_type for "up" */
-         JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);           /* relax_type for "coarsest" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 1);  /* relax_type for "down" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 6 : relax_type, 2);  /* relax_type for "up" */
+         JX_PAMGSetCycleRelaxType(amg_solver, (relax_type == 109) ? 109 : 9, 3);         /* relax_type for "coarsest" */
 
          JX_BiCGSTABCreate(comm, &solver);
          JX_BiCGSTABSetMaxIter(solver, max_iter);
