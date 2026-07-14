@@ -289,3 +289,34 @@ yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
 - **hthread 初始化**：`hthread_dev_open` 必须在 `MPI_Init` 之前调用，确保 DSP 设备在 MPI 初始化前准备好。
 - **内存模式**：`malloc_type=1`（hthread_malloc），所有 JXPAMG 内存分配通过 hthread。如无 DSP 设备需回退，改 `memory.c` 中 `malloc_type=0`。
 - **PanguLU 路径**：`makefile.pub` 中 `PANGULU_DIR` 和 `ENV_DIR` 指向 PanguLU 安装位置，按实际部署修改。
+
+### solver_strong.c relax_type 调度规则
+
+```c
+if (relax_type == 9 || relax_type == 109) {
+    JX_PAMGSetCycleRelaxType(amg_solver, 6, 1);   // down = 6 (hSGS)
+    JX_PAMGSetCycleRelaxType(amg_solver, 6, 2);   // up   = 6 (hSGS)
+} else {
+    JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);   // down = 用户指定
+    JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);   // up   = 用户指定
+}
+// coarsest:
+if (relax_type == 109) {
+    JX_PAMGSetCycleRelaxType(amg_solver, 109, 3);  // coarsest = PanguLU
+} else {
+    JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);    // coarsest = GE
+}
+```
+
+`-rlx` 参数与各层实际类型对应关系：
+
+| `-rlx` | down 光滑 | up 光滑 | coarsest 求解 | 说明 |
+|--------|----------|---------|--------------|------|
+| 3 | hGS | hGS | GE | hGS 光滑 |
+| 6 | hSGS | hSGS | GE | **默认** |
+| 9 | **hSGS** | **hSGS** | GE | 与 6 相同，显式指定粗层 GE |
+| 109 | hSGS | hSGS | **PanguLU** | 粗层替换为 PanguLU |
+| 其他 | 用户指定 | 用户指定 | GE | 透传 |
+
+> `-rlx 9` 的 down/up 固定为 6（hSGS），避免在细层使用高斯消去（极慢）。
+> `-rlx 109` 的 down/up 同样固定为 6，仅最粗层替换为 PanguLU。

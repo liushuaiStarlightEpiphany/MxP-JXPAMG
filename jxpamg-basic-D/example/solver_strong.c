@@ -620,8 +620,8 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
          if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 109, 3); } else { JX_PAMGSetCycleRelaxType(amg_solver, 9, 3); }         /* relax_type for "coarsest" */
          //------------------------------------------------------------
          //    JX_PAMG Setup
@@ -718,8 +718,8 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
          if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 109, 3); } else { JX_PAMGSetCycleRelaxType(amg_solver, 9, 3); }         /* relax_type for "coarsest" */
          JX_PCGCreate(comm, &solver);
          
@@ -901,8 +901,8 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
          if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 109, 3); } else { JX_PAMGSetCycleRelaxType(amg_solver, 9, 3); }         /* relax_type for "coarsest" */
 
          JX_GMRESCreate(comm, &solver);
@@ -1137,8 +1137,8 @@ main( int argc, char *argv[] )
          if (ns_down > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);           /* sweep for "down" */
          if (ns_up > -1) JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);           /* sweep for "up" */
          JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);           /* sweep for "coarsest" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
-         if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 1); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); }  /* relax_type for "down" */
+         if (relax_type == 9 || relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 6, 2); } else { JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); }  /* relax_type for "up" */
          if (relax_type == 109) { JX_PAMGSetCycleRelaxType(amg_solver, 109, 3); } else { JX_PAMGSetCycleRelaxType(amg_solver, 9, 3); }         /* relax_type for "coarsest" */
 
          JX_BiCGSTABCreate(comm, &solver);
