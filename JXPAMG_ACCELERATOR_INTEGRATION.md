@@ -1,4 +1,4 @@
-# BeidouBLAS SpGEMM 接入文档 — jxpamg-basic-D
+# JXPAMG 加速器接入文档 — jxpamg-basic-D（BeidouBLAS + PanguLU）
 
 ## 概述
 
@@ -130,7 +130,7 @@ SPMT_RAP_TYPE=7 SPGEMM_ALGO=hash yhrun --mpi=pmix -n 1 ./solver_strong -nts 1 -p
 
 ---
 
-# PanguLU 接入文档 — jxpamg-basic-D
+# PanguLU 接入文档
 
 ## 概述
 
