@@ -341,3 +341,45 @@ yhrun ... ./solver_strong ...
 ```
 
 > 注意：当前环境中 `SpMV_DOT_FP64` 等 DSP SpMV kernel 尚未加载，`JX_SPMV_TYPE=2` 会报 `func not found`。该代码结构已就绪，待 kernel 可用后即可启用。
+
+## 转置 SpMV（A^T * x）
+
+`jx_CSRMatrixMatvecT` 添加了 `jx_spmv_type` 分发机制，与正向 SpMV 共用全局变量。
+
+### 调用链
+
+```
+jx_hpCSRMatrixMatvecT()  ← hpcsr_matvec.c（层次包装，供 GMRES 等求解器调用）
+  └─ jx_ParCSRMatrixMatvecT()  ← par_csr_matvec.c（并行分发）
+       ├─ 有预计算 diagT/offdT → jx_CSRMatrixMatvec(α, diagT, x, β, y)
+       └─ 无预计算            → jx_CSRMatrixMatvecT(α, A, x, β, y)  ← 分发器
+                                  ├─ type=0 → jx_CSRMatrixMatvecT_origin (CPU)
+                                  └─ type=2 → jx_CSRMatrixMatvecT_v2 (DOT-split)
+```
+
+### 使用方式
+
+```bash
+# 默认：CPU origin（与原版一致）
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
+  -fromonecsrfile /vol8/home/xtu_pcy/matrix/Constant/mat_csr_128X128X128.bin \
+  -rhsfromfile /vol8/home/xtu_pcy/matrix/Constant/rhs_128X128X128.bin \
+  -sid 22 -ipt 0 -rlx 6
+
+# DOT-split 方式（正向+转置均使用）
+export JX_SPMV_TYPE=2
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
+  -fromonecsrfile /vol8/home/xtu_pcy/matrix/Constant/mat_csr_128X128X128.bin \
+  -rhsfromfile /vol8/home/xtu_pcy/matrix/Constant/rhs_128X128X128.bin \
+  -sid 22 -ipt 0 -rlx 6
+```
+
+### 算法说明
+
+| 步骤 | 正向 `A * x` (`_v2`) | 转置 `A^T * x` (`T_v2`) |
+|------|---------------------|------------------------|
+| gather x | `x[A_j[jj]]`（按列索引） | `x[row_of_nz[jj]]`（按行索引） |
+| 元素乘 | `dy[jj] = A[jj] * x[...]` | 相同 |
+| 写入 y | `y[i] = sum(dy[A_i[i]:A_i[i+1]])`（行规约） | `y[A_j[jj]] += dy[jj]`（列 scatter） |
+
+> 注意：`JX_SPMV_TYPE=2` 的 DOT-split 方式在 CPU 上比 origin 慢（需额外临时数组），设计目标为 DSP kernel 加速。DSP kernel 就绪后即可启用。
