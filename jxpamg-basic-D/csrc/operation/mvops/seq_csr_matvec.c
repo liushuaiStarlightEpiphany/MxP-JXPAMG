@@ -1318,21 +1318,27 @@ jx_CSRMatrixMatvecT_v2(JX_Real alpha,
    if (rtemp == 0.0) { for (i = 0; i < num_cols; i++) y_data[i] = 0.0; }
    else if (rtemp != 1.0) { for (i = 0; i < num_cols; i++) y_data[i] *= rtemp; }
 
-   /* DOT-split: compute per-nonzero product on CPU */
-   JX_Real *dy_data = (JX_Real *)malloc(A_nnz * sizeof(JX_Real));
-
-   for (jj = 0; jj < A_nnz; jj++)
-   {
-      dy_data[jj] = A_data[jj] * x_data[A_j[jj]];
+   /* Build row_of_nz: row index per nonzero (needed for transpose gather) */
+   JX_Int *row_of_nz = (JX_Int *)malloc(A_nnz * sizeof(JX_Int));
+   for (i = 0; i < num_rows; i++) {
+      for (jj = A_i[i]; jj < A_i[i + 1]; jj++) row_of_nz[jj] = i;
    }
 
-   /* Gather by column (scatter-add to y) */
+   /* DOT-split: per-nonzero product, gather x by ROW index (A^T * x) */
+   JX_Real *dy_data = (JX_Real *)malloc(A_nnz * sizeof(JX_Real));
+   for (jj = 0; jj < A_nnz; jj++)
+   {
+      dy_data[jj] = A_data[jj] * x_data[row_of_nz[jj]];
+   }
+
+   /* Scatter to y by COLUMN index */
    for (jj = 0; jj < A_nnz; jj++)
    {
       y_data[A_j[jj]] += dy_data[jj];
    }
 
    free(dy_data);
+   free(row_of_nz);
 
    if (alpha != 1.0)
    {
