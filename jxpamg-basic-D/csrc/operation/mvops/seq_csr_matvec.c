@@ -12,9 +12,11 @@
 #include "jx_mv.h"
 #include "hthread_host.h"
 
+// -------------------------------------
 extern JX_Int myid;
 extern JX_Int coreNums;
 extern JX_Int jx_spmv_type;
+// -------------------------------------
 
 struct jx_SpMVPrecondFP64Data_struct
 {
@@ -29,6 +31,21 @@ struct jx_SpMVPrecondFP64Data_struct
    JX_Int *dA_j;
    JX_Int *task_row_bounds;
    JX_Real *dy_data;
+};
+
+/* Device-side preprocessing owned by a relax-103 color cache. */
+struct jx_Relax103SpMVData_struct
+{
+   JX_Int cluster_id;
+   JX_Int num_rows;
+   JX_Int num_nonzeros;
+   JX_Int num_colors;
+
+   JX_Int *dA_j;
+   JX_Real *dy_data;
+
+   JX_Int *task_offsets;
+   JX_Int *task_bounds;
 };
 
 static void
@@ -47,6 +64,290 @@ jx_SpMVPrecondFP64DataDestroy(jx_SpMVPrecondFP64Data *pre)
       hthread_free(pre->task_row_bounds);
 
    jx_TFree(pre);
+}
+
+static void
+jx_Relax103SpMVDataDestroy(void *data_ptr)
+{
+   struct jx_Relax103SpMVData_struct *pre =
+      (struct jx_Relax103SpMVData_struct *)data_ptr;
+
+   if (pre == NULL)
+   {
+      return;
+   }
+
+   if (pre->dA_j != NULL)
+   {
+      hthread_free(pre->dA_j);
+   }
+   if (pre->dy_data != NULL)
+   {
+      hthread_free(pre->dy_data);
+   }
+   if (pre->task_bounds != NULL)
+   {
+      hthread_free(pre->task_bounds);
+   }
+
+   jx_TFree(pre->task_offsets);
+   jx_TFree(pre);
+}
+
+static struct jx_Relax103SpMVData_struct *
+jx_Relax103SpMVDataCreate(jx_Relax103ColorData *color_data,
+                          JX_Int myid)
+{
+   struct jx_Relax103SpMVData_struct *pre;
+   JX_Int cluster_id = myid % 4;
+   JX_Int AM_size = 96000 / 3;
+   JX_Int bounds_capacity =
+      color_data->num_rows + color_data->nlev;
+   JX_Int nnz_capacity = color_data->num_nonzeros;
+   JX_Int size = 0;
+   JX_Int c, i;
+
+   if (bounds_capacity < 1)
+   {
+      bounds_capacity = 1;
+   }
+   if (nnz_capacity < 1)
+   {
+      nnz_capacity = 1;
+   }
+
+   pre = jx_CTAlloc(struct jx_Relax103SpMVData_struct, 1);
+   if (pre == NULL)
+   {
+      return NULL;
+   }
+
+   pre->cluster_id = cluster_id;
+   pre->num_rows = color_data->num_rows;
+   pre->num_nonzeros = color_data->num_nonzeros;
+   pre->num_colors = color_data->nlev;
+
+   pre->task_offsets = jx_CTAlloc(JX_Int, color_data->nlev + 1);
+   pre->task_bounds =
+      (JX_Int *)hthread_malloc(cluster_id,
+                               bounds_capacity * sizeof(JX_Int),
+                               HT_MEM_RW);
+   pre->dA_j =
+      (JX_Int *)hthread_malloc(cluster_id,
+                               nnz_capacity * sizeof(JX_Int),
+                               HT_MEM_RW);
+   pre->dy_data =
+      (JX_Real *)hthread_malloc(cluster_id,
+                                nnz_capacity * sizeof(JX_Real),
+                                HT_MEM_RW);
+
+   if (pre->task_offsets == NULL || pre->task_bounds == NULL ||
+       pre->dA_j == NULL || pre->dy_data == NULL)
+   {
+      jx_Relax103SpMVDataDestroy(pre);
+      return NULL;
+   }
+
+   /*
+    * Each color is a contiguous row interval in the reordered CSR.  Build
+    * one flattened collection of NNZ-balanced task bounds and remember the
+    * segment belonging to every color.
+    */
+   for (c = 0; c < color_data->nlev; c++)
+   {
+      JX_Int start_row = color_data->ilev[c];
+      JX_Int end_color_row = color_data->ilev[c + 1];
+
+      pre->task_offsets[c] = size;
+      pre->task_bounds[size++] = start_row;
+
+      while (start_row < end_color_row)
+      {
+         JX_Int target_nnz = color_data->A_i[start_row] + AM_size;
+         JX_Int current_row = start_row + 1;
+         JX_Int end_row;
+
+         if (color_data->A_i[end_color_row] <= target_nnz)
+         {
+            end_row = end_color_row;
+         }
+         else
+         {
+            while (current_row < end_color_row &&
+                   color_data->A_i[current_row] < target_nnz)
+            {
+               current_row++;
+            }
+
+            if (current_row <= start_row + 1)
+            {
+               end_row = start_row + 1;
+            }
+            else
+            {
+               end_row = current_row - 1;
+            }
+         }
+
+         if (end_row > end_color_row)
+         {
+            end_row = end_color_row;
+         }
+         if (end_row <= start_row)
+         {
+            end_row = start_row + 1;
+         }
+
+         pre->task_bounds[size++] = end_row;
+         start_row = end_row;
+      }
+   }
+   pre->task_offsets[color_data->nlev] = size;
+
+   for (i = 0; i < color_data->num_nonzeros; i++)
+   {
+      pre->dA_j[i] = color_data->A_j[i] * 8;
+   }
+
+   return pre;
+}
+
+static JX_Int
+jx_Relax103ColorMatvecCPU(jx_Relax103ColorData *color_data,
+                          JX_Int color,
+                          jx_Vector *x,
+                          jx_Vector *y)
+{
+   JX_Real *x_data = jx_VectorData(x);
+   JX_Real *y_data = jx_VectorData(y);
+   JX_Int k, jj, row;
+   JX_Real row_sum;
+
+#pragma omp parallel for private(k, jj, row, row_sum)
+   for (k = color_data->ilev[color];
+        k < color_data->ilev[color + 1];
+        k++)
+   {
+      row_sum = 0.0;
+      for (jj = color_data->A_i[k]; jj < color_data->A_i[k + 1]; jj++)
+      {
+         row_sum += color_data->A_data[jj] *
+                    x_data[color_data->A_j[jj]];
+      }
+
+      row = color_data->jlev[k];
+      y_data[row] = row_sum;
+   }
+
+   return 0;
+}
+
+static JX_Int
+jx_Relax103ColorMatvecFP64(jx_Relax103ColorData *color_data,
+                           JX_Int color,
+                           jx_Vector *x,
+                           jx_Vector *y,
+                           JX_Int myid)
+{
+   struct jx_Relax103SpMVData_struct *pre =
+      (struct jx_Relax103SpMVData_struct *)color_data->spmv_data;
+   JX_Real *x_data = jx_VectorData(x);
+   JX_Real *y_data = jx_VectorData(y);
+   JX_Int task_start;
+   JX_Int num_tasks;
+   JX_Int threads_id;
+   JX_Int barrier_id;
+   JX_Int k, jj, row;
+   JX_Real row_sum;
+   unsigned long args[10];
+
+   if (pre == NULL)
+   {
+      pre = jx_Relax103SpMVDataCreate(color_data, myid);
+      if (pre == NULL)
+      {
+         if (myid == 0)
+         {
+            fprintf(stderr,
+                    "Fatal Error: relax-103 color SpMV preprocessing failed.\n");
+         }
+         return 1;
+      }
+
+      color_data->spmv_data = pre;
+      color_data->spmv_data_destroy = jx_Relax103SpMVDataDestroy;
+   }
+
+   task_start = pre->task_offsets[color];
+   num_tasks = pre->task_offsets[color + 1] - task_start - 1;
+
+   threads_id = hthread_group_create(pre->cluster_id, coreNums);
+   barrier_id = hthread_barrier_create(pre->cluster_id);
+
+   args[0] = (unsigned long)pre->num_rows;
+   args[1] = (unsigned long)coreNums;
+   args[2] = (unsigned long)num_tasks;
+   args[3] = (unsigned long)barrier_id;
+   args[4] = (unsigned long)color_data->A_i;
+   args[5] = (unsigned long)pre->dA_j;
+   args[6] = (unsigned long)color_data->A_data;
+   args[7] = (unsigned long)x_data;
+   args[8] = (unsigned long)pre->dy_data;
+   args[9] = (unsigned long)&pre->task_bounds[task_start];
+
+   hthread_group_exec(threads_id, "SpMV_GSM_FP64", 4, 6, args);
+   hthread_group_wait(threads_id);
+
+#pragma omp parallel for private(k, jj, row, row_sum)
+   for (k = color_data->ilev[color];
+        k < color_data->ilev[color + 1];
+        k++)
+   {
+      row_sum = 0.0;
+      for (jj = color_data->A_i[k]; jj < color_data->A_i[k + 1]; jj++)
+      {
+         row_sum += pre->dy_data[jj];
+      }
+
+      row = color_data->jlev[k];
+      y_data[row] = row_sum;
+   }
+
+   hthread_barrier_destroy(barrier_id);
+   hthread_group_destroy(threads_id);
+
+   return 0;
+}
+
+JX_Int
+jx_Relax103ColorMatvec(jx_Relax103ColorData *color_data,
+                       JX_Int color,
+                       jx_Vector *x,
+                       jx_Vector *y,
+                       JX_Int myid)
+{
+   if (color_data == NULL || color < 0 || color >= color_data->nlev)
+   {
+      return 1;
+   }
+   if (jx_VectorSize(x) != color_data->num_rows ||
+       jx_VectorSize(y) != color_data->num_rows)
+   {
+      return 2;
+   }
+
+   if (jx_spmv_type == 1)
+   {
+      return jx_Relax103ColorMatvecFP64(color_data, color, x, y, myid);
+   }
+   if (jx_spmv_type != 0 && myid == 0)
+   {
+      fprintf(stderr,
+              "Warning: relax-103 only supports jx_spmv_type 0/1; "
+              "falling back to CPU.\n");
+   }
+
+   return jx_Relax103ColorMatvecCPU(color_data, color, x, y);
 }
 
 static jx_SpMVPrecondFP64Data *
@@ -222,9 +523,6 @@ jx_CSRMatrixMatvec_origin(JX_Real alpha,
                           JX_Real beta,
                           jx_Vector *y)
 {
-   // if (myid == 0)
-   //    jx_printf("[DEBUG] enter jx_CSRMatrixMatvec_origin\n");
-
    JX_Real *A_data = jx_CSRMatrixData(A);
    JX_Int *A_i = jx_CSRMatrixI(A);
    JX_Int *A_j = jx_CSRMatrixJ(A);
@@ -760,11 +1058,30 @@ jx_CSRMatrixMatvecOutOfPlace(JX_Real alpha,
 
 /*!
  * \fn JX_Int jx_CSRMatrixMatvecT
+ * \brief Perform y = alpha*A^T*x + beta*y (dispatcher with jx_spmv_type).
+ * \date 2026/07
+ */
+JX_Int
+jx_CSRMatrixMatvecT(JX_Real alpha,
+                    jx_CSRMatrix *A,
+                    jx_Vector *x,
+                    JX_Real beta,
+                    jx_Vector *y)
+{
+   switch (jx_spmv_type)
+   {
+   case 2: return jx_CSRMatrixMatvecT_v2(alpha, A, x, beta, y);
+   default: return jx_CSRMatrixMatvecT_origin(alpha, A, x, beta, y);
+   }
+}
+
+/*!
+ * \fn JX_Int jx_CSRMatrixMatvecT_origin
  * \brief Perform y = alpha*A^T*x + beta*y.
  * \date 2011/09/03
  */
 JX_Int
-jx_CSRMatrixMatvecT(JX_Real alpha,
+jx_CSRMatrixMatvecT_origin(JX_Real alpha,
                     jx_CSRMatrix *A,
                     jx_Vector *x,
                     JX_Real beta,
@@ -961,6 +1278,109 @@ jx_CSRMatrixMatvecT(JX_Real alpha,
    return ierr;
 }
 
+
+/*!
+ * \fn JX_Int jx_CSRMatrixMatvecT_v2
+ * \brief y = alpha*A^T*x + beta*y (DOT-split DSP-accelerated transpose).
+ * \date 2026/07
+ */
+JX_Int
+jx_CSRMatrixMatvecT_v2(JX_Real alpha,
+                       jx_CSRMatrix *A,
+                       jx_Vector *x,
+                       JX_Real beta,
+                       jx_Vector *y)
+{
+   JX_Real *A_data = jx_CSRMatrixData(A);
+   JX_Int *A_i = jx_CSRMatrixI(A);
+   JX_Int *A_j = jx_CSRMatrixJ(A);
+   JX_Int num_rows = jx_CSRMatrixNumRows(A);
+   JX_Int num_cols = jx_CSRMatrixNumCols(A);
+   JX_Int A_nnz = jx_CSRMatrixNumNonzeros(A);
+
+   JX_Real *x_data = jx_VectorData(x);
+   JX_Real *y_data = jx_VectorData(y);
+   JX_Int i, jj;
+   JX_Int ierr = 0;
+
+   if (num_rows != jx_VectorSize(x)) ierr = 1;
+   if (num_cols != jx_VectorSize(y)) ierr = 2;
+   if (num_rows != jx_VectorSize(x) && num_cols != jx_VectorSize(y)) ierr = 3;
+
+   if (alpha == 0.0)
+   {
+      for (i = 0; i < num_cols; i++) y_data[i] *= beta;
+      return ierr;
+   }
+
+   JX_Real rtemp = beta / alpha;
+   if (rtemp == 0.0) { for (i = 0; i < num_cols; i++) y_data[i] = 0.0; }
+   else if (rtemp != 1.0) { for (i = 0; i < num_cols; i++) y_data[i] *= rtemp; }
+
+   JX_Int *row_of_nz = (JX_Int *)malloc(A_nnz * sizeof(JX_Int));
+   for (i = 0; i < num_rows; i++) {
+      for (jj = A_i[i]; jj < A_i[i + 1]; jj++) row_of_nz[jj] = i;
+   }
+
+   JX_Int cluster_id = 0;
+
+   JX_Real *dx_data = (JX_Real *)hthread_malloc(cluster_id, sizeof(JX_Real) * A_nnz, HT_MEM_RW);
+   for (jj = 0; jj < A_nnz; jj++) dx_data[jj] = x_data[row_of_nz[jj]];
+
+   JX_Int AM_size = 96000 / 3;
+   JX_Int capacity = num_rows + 1;
+   JX_Int sz = 0, start_row = 0;
+   JX_Int *task_row_bounds = (JX_Int *)hthread_malloc(cluster_id, capacity * sizeof(JX_Int), HT_MEM_RW);
+   task_row_bounds[sz++] = 0;
+   while (start_row < num_rows)
+   {
+      JX_Int target_nnz = A_i[start_row] + AM_size;
+      JX_Int current_row = start_row + 1;
+      JX_Int end_row;
+      if (A_i[num_rows] <= target_nnz) { task_row_bounds[sz++] = num_rows; break; }
+      while (current_row < num_rows && A_i[current_row] < target_nnz) current_row++;
+      end_row = (current_row <= start_row + 1) ? start_row + 1 : current_row - 1;
+      if (end_row > num_rows) end_row = num_rows;
+      task_row_bounds[sz++] = end_row;
+      start_row = end_row;
+   }
+   JX_Int num_tasks = sz - 1;
+
+   JX_Real *dy_data = (JX_Real *)hthread_malloc(cluster_id, sizeof(JX_Real) * A_nnz, HT_MEM_RW);
+
+   JX_Int threads_id = hthread_group_create(cluster_id, coreNums);
+   JX_Int barrier_id = hthread_barrier_create(cluster_id);
+   unsigned long args[7];
+   args[0] = coreNums;
+   args[1] = num_tasks;
+   args[2] = (unsigned long)task_row_bounds;
+   args[3] = (unsigned long)A_i;
+   args[4] = (unsigned long)A_data;
+   args[5] = (unsigned long)dx_data;
+   args[6] = (unsigned long)dy_data;
+   hthread_group_exec(threads_id, "SpMV_DOT_FP64", 2, 5, args);
+   hthread_group_wait(threads_id);
+
+   hthread_barrier_destroy(barrier_id);
+   hthread_group_destroy(threads_id);
+
+   for (jj = 0; jj < A_nnz; jj++)
+   {
+      y_data[A_j[jj]] += dy_data[jj];
+   }
+
+   hthread_free(dx_data);
+   hthread_free(dy_data);
+   hthread_free(task_row_bounds);
+   free(row_of_nz);
+
+   if (alpha != 1.0)
+   {
+      for (i = 0; i < num_cols; i++) y_data[i] *= alpha;
+   }
+
+   return ierr;
+}
 // 2025.12.18 ============================
 // GSM 版本 baseline  ====================
 JX_Int
@@ -1112,7 +1532,6 @@ jx_CSRMatrixMatvec_baseline(JX_Real alpha,
    for (i = 0; i < num_rows; i++)
    {
       y_data[i] = alpha * dy_data[i] + beta * y_data[i];
-      // y_data[i] = 1.0;
    }
 
    hthread_barrier_destroy(barrier_id);
@@ -1125,174 +1544,6 @@ jx_CSRMatrixMatvec_baseline(JX_Real alpha,
    return 0;
 }
 
-// JX_Int
-// jx_CSRMatrixMatvec_v1(JX_Real alpha,
-//                       jx_CSRMatrix *A,
-//                       jx_Vector *x,
-//                       JX_Real beta,
-//                       jx_Vector *y,
-//                       JX_Int myid)
-// {
-//    // if (myid == 0)
-//    //    printf("\n jx_CSRMatrixMatvec_DV (GSM) \n");
-
-//    JX_Real *A_data = jx_CSRMatrixData(A);
-//    JX_Int *A_i = jx_CSRMatrixI(A);
-//    JX_Int *A_j = jx_CSRMatrixJ(A);
-//    JX_Int num_rows = jx_CSRMatrixNumRows(A);
-//    JX_Int num_cols = jx_CSRMatrixNumCols(A);
-//    JX_Int A_nnz = jx_CSRMatrixNumNonzeros(A);
-
-//    JX_Real *x_data = jx_VectorData(x);
-//    JX_Real *y_data = jx_VectorData(y);
-//    JX_Int x_size = jx_VectorSize(x);
-//    JX_Int y_size = jx_VectorSize(y);
-//    JX_Int num_vectors = jx_VectorNumVectors(x);
-//    JX_Int idxstride_y = jx_VectorIndexStride(y);
-//    JX_Int vecstride_y = jx_VectorVectorStride(y);
-//    JX_Int idxstride_x = jx_VectorIndexStride(x);
-//    JX_Int vecstride_x = jx_VectorVectorStride(x);
-
-//    JX_Real temp, tempx;
-//    JX_Int i, j, jj;
-//    JX_Int m;
-//    JX_Int ierr = 0;
-
-//    JX_Int cluster_id = myid % 4;
-
-//    jx_assert(num_vectors == jx_VectorNumVectors(y));
-
-//    if (num_cols != x_size)
-//       ierr = 1;
-
-//    if (num_rows != y_size)
-//       ierr = 2;
-
-//    if (num_cols != x_size && num_rows != y_size)
-//       ierr = 3;
-
-//    /*-----------------------------------------------------------------------
-//     * Do (alpha == 0.0) computation - RDF: USE MACHINE EPS
-//     *-----------------------------------------------------------------------*/
-//    if (alpha == 0.0)
-//    {
-// #define JX_SMP_PRIVATE i
-// #include "../../../include/jx_smp_forloop.h"
-//       for (i = 0; i < num_rows * num_vectors; i++)
-//          y_data[i] *= beta;
-
-//       return ierr;
-//    }
-//    /*-----------------------------------------------
-//     * y += A*x   天河平台实现
-//     *---------------------------------------------*/
-//    JX_Int AM_size = 96000 / 3;
-//    JX_Int capacity = num_rows + 1;
-//    JX_Int size = 0;
-//    JX_Int start_row = 0;
-
-//    JX_Int *task_row_bounds = (JX_Int *)hthread_malloc(cluster_id, capacity * sizeof(JX_Int), HT_MEM_RW);
-
-//    task_row_bounds[size++] = 0;
-
-//    while (start_row < num_rows)
-//    {
-//       JX_Int target_nnz = A_i[start_row] + AM_size;
-//       JX_Int current_row = start_row + 1;
-//       JX_Int end_row;
-
-//       if (A_i[num_rows] <= target_nnz)
-//       {
-//          task_row_bounds[size++] = num_rows;
-//          break;
-//       }
-
-//       while (current_row < num_rows && A_i[current_row] < target_nnz)
-//       {
-//          current_row++;
-//       }
-
-//       if (current_row <= start_row + 1)
-//       {
-//          end_row = start_row + 1;
-//       }
-//       else
-//       {
-//          end_row = current_row - 1;
-//       }
-
-//       if (end_row > num_rows)
-//          end_row = num_rows;
-
-//       task_row_bounds[size++] = end_row;
-//       start_row = end_row;
-//    }
-
-//    JX_Int num_tasks = size - 1;
-
-//    /* ===========================================================
-//     * 步骤 1: 将 A_j 转换为按字节偏移
-//     * ===========================================================*/
-//    JX_Int *dA_j = hthread_malloc(cluster_id, sizeof(JX_Int) * A_nnz, HT_MEM_RW);
-
-//    for (JX_Int i = 0; i < A_nnz; i++)
-//    {
-//       dA_j[i] = A_j[i] * 8;
-//    }
-
-//    // 设备端计算结果
-//    JX_Real *dy_data = hthread_malloc(cluster_id, sizeof(JX_Real) * A_nnz, HT_MEM_RW);
-
-//    JX_Int threads_id = hthread_group_create(cluster_id, coreNums);
-//    JX_Int barrier_id = hthread_barrier_create(cluster_id);
-
-//    unsigned long args[10];
-//    args[0] = (unsigned long)num_rows;
-//    args[1] = (unsigned long)coreNums;
-//    args[2] = (unsigned long)num_tasks;
-//    args[3] = (unsigned long)barrier_id;
-//    args[4] = (unsigned long)A_i;
-//    args[5] = (unsigned long)dA_j;
-//    args[6] = (unsigned long)A_data;
-//    args[7] = (unsigned long)x_data;
-//    args[8] = (unsigned long)dy_data;
-//    args[9] = (unsigned long)task_row_bounds;
-
-//    hthread_group_exec(threads_id, "SpMV_GSM_FP64", 4, 6, args);
-//    hthread_group_wait(threads_id);
-
-//    JX_Real row_sum;
-// #define JX_SMP_PRIVATE i, j, row_sum
-// #include "../../../include/jx_smp_forloop.h"
-//    for (i = 0; i < num_rows; i++)
-//    {
-//       row_sum = 0.0;
-//       for (j = A_i[i]; j < A_i[i + 1]; j++)
-//       {
-//          row_sum += dy_data[j];
-//       }
-
-//       if (beta == 0.0)
-//       {
-//          y_data[i] = alpha * row_sum;
-//       }
-//       else
-//       {
-//          y_data[i] = beta * y_data[i] + alpha * row_sum;
-//       }
-//    }
-
-//    hthread_barrier_destroy(barrier_id);
-//    hthread_group_destroy(threads_id);
-
-//    // 释放设备端内存和主机端内存
-//    hthread_free(dA_j);
-//    hthread_free(dy_data);
-//    hthread_free(task_row_bounds);
-
-//    return 0;
-// }
-
 JX_Int
 jx_CSRMatrixMatvec_v1(JX_Real alpha,
                       jx_CSRMatrix *A,
@@ -1302,7 +1553,7 @@ jx_CSRMatrixMatvec_v1(JX_Real alpha,
                       JX_Int myid)
 {
    // if (myid == 0)
-   //    jx_printf("[DEBUG] enter jx_CSRMatrixMatvec_v1 (GSM) \n");
+   //    jxf_printf("jx_CSRMatrixMatvec_v1 \n");
 
    JX_Real *A_data = jx_CSRMatrixData(A);
    JX_Int *A_i = jx_CSRMatrixI(A);
@@ -1412,6 +1663,7 @@ jx_CSRMatrixMatvec_v1(JX_Real alpha,
    return ierr;
 }
 
+/* 乘加分裂版本, 不使用 GSM */
 JX_Int
 jx_CSRMatrixMatvec_v2(JX_Real alpha,
                       jx_CSRMatrix *A,
@@ -1421,7 +1673,7 @@ jx_CSRMatrixMatvec_v2(JX_Real alpha,
                       JX_Int myid)
 {
    // if (myid == 0)
-   //    printf("\n jx_CSRMatrixMatvec_v2 (GSM) \n");
+   //    jxf_printf("jx_CSRMatrixMatvec_v2 \n");
 
    JX_Real *A_data = jx_CSRMatrixData(A);
    JX_Int *A_i = jx_CSRMatrixI(A);

@@ -76,7 +76,6 @@ JX_Int jx_spmv_type = 0;
 JX_Int coreNums = 1;
 JX_Int myid = 0;
 JX_Int jx_dot_type = 0;
-
 main( int argc, char *argv[] )
 {
    MPI_Comm     comm = MPI_COMM_WORLD;
@@ -176,6 +175,7 @@ main( int argc, char *argv[] )
    //--------------------------
    //  启动 MPI
    //--------------------------
+   { char *env = getenv("JX_SPMV_TYPE"); if (env) jx_spmv_type = atoi(env); }
    hthread_dev_open(0);
    hthread_dat_load(0, "kernel.dat");
    jx_MPI_Init(&argc, &argv);

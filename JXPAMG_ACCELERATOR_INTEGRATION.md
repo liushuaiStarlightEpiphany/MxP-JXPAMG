@@ -320,3 +320,24 @@ if (relax_type == 109) {
 
 > `-rlx 9` 的 down/up 固定为 6（hSGS），避免在细层使用高斯消去（极慢）。
 > `-rlx 109` 的 down/up 同样固定为 6，仅最粗层替换为 PanguLU。
+
+## 异构转置 SpMV（A^T * x）
+
+在 `jx_CSRMatrixMatvecT` 中添加了 `jx_spmv_type` 分发机制（与正向 SpMV 相同）：
+
+| `jx_spmv_type` | 函数 | 说明 |
+|----------------|------|------|
+| 0 | `jx_CSRMatrixMatvecT_origin` | CPU 原始实现（默认） |
+| 2 | `jx_CSRMatrixMatvecT_v2` | DOT-split 方式，复用 `SpMV_DOT_FP64` DSP kernel |
+
+**使用方式**：
+```bash
+# CPU 模式（默认）
+yhrun ... ./solver_strong ...
+
+# DSP 加速模式（需 spmv_kernel.dat 包含 SpMV_DOT_FP64）
+export JX_SPMV_TYPE=2
+yhrun ... ./solver_strong ...
+```
+
+> 注意：当前环境中 `SpMV_DOT_FP64` 等 DSP SpMV kernel 尚未加载，`JX_SPMV_TYPE=2` 会报 `func not found`。该代码结构已就绪，待 kernel 可用后即可启用。

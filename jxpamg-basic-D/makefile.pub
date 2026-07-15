@@ -187,7 +187,7 @@ override C_COMPILE_FLAGS += -g
 override F_COMPILE_FLAGS += -g
 endif
 
-override C_COMPILE_OPTION += -O2 -Wall ${JX_MPI_CP_OPTION}  ${JX_OMP_CP_OPTION} ${JX_BIG_INT_OPTION} ${JX_BIG_DOUBLE_OPTION} ${JX_User_Optional_Parameters}
+override C_COMPILE_OPTION += -O2 -Wall -Wno-unused-variable ${JX_MPI_CP_OPTION}  ${JX_OMP_CP_OPTION} ${JX_BIG_INT_OPTION} ${JX_BIG_DOUBLE_OPTION} ${JX_User_Optional_Parameters}
 override F_COMPILE_OPTION += -O2 -Wall
 CDEFS  =
 FDEFS  = ${CDEFS}
