@@ -1280,8 +1280,9 @@ jx_CSRMatrixMatvecT_origin(JX_Real alpha,
 
 
 /*!
+   
  * \fn JX_Int jx_CSRMatrixMatvecT_v2
- * \brief y = alpha*A^T*x + beta*y (DOT-split DSP-accelerated transpose).
+ * \brief y = alpha*A^T*x + beta*y (DOT-split CPU transpose).
  * \date 2026/07
  */
 JX_Int
@@ -1317,62 +1318,21 @@ jx_CSRMatrixMatvecT_v2(JX_Real alpha,
    if (rtemp == 0.0) { for (i = 0; i < num_cols; i++) y_data[i] = 0.0; }
    else if (rtemp != 1.0) { for (i = 0; i < num_cols; i++) y_data[i] *= rtemp; }
 
-   JX_Int *row_of_nz = (JX_Int *)malloc(A_nnz * sizeof(JX_Int));
-   for (i = 0; i < num_rows; i++) {
-      for (jj = A_i[i]; jj < A_i[i + 1]; jj++) row_of_nz[jj] = i;
-   }
+   /* DOT-split: compute per-nonzero product on CPU */
+   JX_Real *dy_data = (JX_Real *)malloc(A_nnz * sizeof(JX_Real));
 
-   JX_Int cluster_id = 0;
-
-   JX_Real *dx_data = (JX_Real *)hthread_malloc(cluster_id, sizeof(JX_Real) * A_nnz, HT_MEM_RW);
-   for (jj = 0; jj < A_nnz; jj++) dx_data[jj] = x_data[row_of_nz[jj]];
-
-   JX_Int AM_size = 96000 / 3;
-   JX_Int capacity = num_rows + 1;
-   JX_Int sz = 0, start_row = 0;
-   JX_Int *task_row_bounds = (JX_Int *)hthread_malloc(cluster_id, capacity * sizeof(JX_Int), HT_MEM_RW);
-   task_row_bounds[sz++] = 0;
-   while (start_row < num_rows)
+   for (jj = 0; jj < A_nnz; jj++)
    {
-      JX_Int target_nnz = A_i[start_row] + AM_size;
-      JX_Int current_row = start_row + 1;
-      JX_Int end_row;
-      if (A_i[num_rows] <= target_nnz) { task_row_bounds[sz++] = num_rows; break; }
-      while (current_row < num_rows && A_i[current_row] < target_nnz) current_row++;
-      end_row = (current_row <= start_row + 1) ? start_row + 1 : current_row - 1;
-      if (end_row > num_rows) end_row = num_rows;
-      task_row_bounds[sz++] = end_row;
-      start_row = end_row;
+      dy_data[jj] = A_data[jj] * x_data[A_j[jj]];
    }
-   JX_Int num_tasks = sz - 1;
 
-   JX_Real *dy_data = (JX_Real *)hthread_malloc(cluster_id, sizeof(JX_Real) * A_nnz, HT_MEM_RW);
-
-   JX_Int threads_id = hthread_group_create(cluster_id, coreNums);
-   JX_Int barrier_id = hthread_barrier_create(cluster_id);
-   unsigned long args[7];
-   args[0] = coreNums;
-   args[1] = num_tasks;
-   args[2] = (unsigned long)task_row_bounds;
-   args[3] = (unsigned long)A_i;
-   args[4] = (unsigned long)A_data;
-   args[5] = (unsigned long)dx_data;
-   args[6] = (unsigned long)dy_data;
-   hthread_group_exec(threads_id, "SpMV_DOT_FP64", 2, 5, args);
-   hthread_group_wait(threads_id);
-
-   hthread_barrier_destroy(barrier_id);
-   hthread_group_destroy(threads_id);
-
+   /* Gather by column (scatter-add to y) */
    for (jj = 0; jj < A_nnz; jj++)
    {
       y_data[A_j[jj]] += dy_data[jj];
    }
 
-   hthread_free(dx_data);
-   hthread_free(dy_data);
-   hthread_free(task_row_bounds);
-   free(row_of_nz);
+   free(dy_data);
 
    if (alpha != 1.0)
    {
@@ -1381,6 +1341,7 @@ jx_CSRMatrixMatvecT_v2(JX_Real alpha,
 
    return ierr;
 }
+
 // 2025.12.18 ============================
 // GSM 版本 baseline  ====================
 JX_Int
@@ -1672,9 +1633,6 @@ jx_CSRMatrixMatvec_v2(JX_Real alpha,
                       jx_Vector *y,
                       JX_Int myid)
 {
-   // if (myid == 0)
-   //    jxf_printf("jx_CSRMatrixMatvec_v2 \n");
-
    JX_Real *A_data = jx_CSRMatrixData(A);
    JX_Int *A_i = jx_CSRMatrixI(A);
    JX_Int *A_j = jx_CSRMatrixJ(A);
@@ -1684,141 +1642,47 @@ jx_CSRMatrixMatvec_v2(JX_Real alpha,
 
    JX_Real *x_data = jx_VectorData(x);
    JX_Real *y_data = jx_VectorData(y);
-   JX_Int x_size = jx_VectorSize(x);
-   JX_Int y_size = jx_VectorSize(y);
-   JX_Int num_vectors = jx_VectorNumVectors(x);
-   JX_Int idxstride_y = jx_VectorIndexStride(y);
-   JX_Int vecstride_y = jx_VectorVectorStride(y);
-   JX_Int idxstride_x = jx_VectorIndexStride(x);
-   JX_Int vecstride_x = jx_VectorVectorStride(x);
-
-   JX_Real temp, tempx;
    JX_Int i, j, jj;
-   JX_Int m;
    JX_Int ierr = 0;
 
-   JX_Int cluster_id = myid % 4;
+   if (num_cols != jx_VectorSize(x)) ierr = 1;
+   if (num_rows != jx_VectorSize(y)) ierr = 2;
+   if (num_cols != jx_VectorSize(x) && num_rows != jx_VectorSize(y)) ierr = 3;
 
-   jx_assert(num_vectors == jx_VectorNumVectors(y));
-
-   if (num_cols != x_size)
-      ierr = 1;
-
-   if (num_rows != y_size)
-      ierr = 2;
-
-   if (num_cols != x_size && num_rows != y_size)
-      ierr = 3;
-
-   /*-----------------------------------------------------------------------
-    * Do (alpha == 0.0) computation - RDF: USE MACHINE EPS
-    *-----------------------------------------------------------------------*/
    if (alpha == 0.0)
    {
-#define JX_SMP_PRIVATE i
-#include "../../../include/jx_smp_forloop.h"
-      for (i = 0; i < num_rows * num_vectors; i++)
-         y_data[i] *= beta;
-
+      for (i = 0; i < num_rows; i++) y_data[i] *= beta;
       return ierr;
    }
-   /*-----------------------------------------------
-    * y += A*x   天河平台实现
-    *---------------------------------------------*/
-   JX_Int AM_size = 96000 / 3;
-   JX_Int capacity = num_rows + 1;
-   JX_Int size = 0;
-   JX_Int start_row = 0;
 
-   JX_Int *task_row_bounds = (JX_Int *)hthread_malloc(cluster_id, capacity * sizeof(JX_Int), HT_MEM_RW);
-   task_row_bounds[size++] = 0;
-   while (start_row < num_rows)
-   {
-      JX_Int target_nnz = A_i[start_row] + AM_size;
-      JX_Int current_row = start_row + 1;
-      JX_Int end_row;
+   JX_Real rtemp = beta / alpha;
+   if (rtemp == 0.0) { for (i = 0; i < num_rows; i++) y_data[i] = 0.0; }
+   else if (rtemp != 1.0) { for (i = 0; i < num_rows; i++) y_data[i] *= rtemp; }
 
-      if (A_i[num_rows] <= target_nnz)
-      {
-         task_row_bounds[size++] = num_rows;
-         break;
-      }
-
-      while (current_row < num_rows && A_i[current_row] < target_nnz)
-      {
-         current_row++;
-      }
-
-      if (current_row <= start_row + 1)
-      {
-         end_row = start_row + 1;
-      }
-      else
-      {
-         end_row = current_row - 1;
-      }
-
-      if (end_row > num_rows)
-         end_row = num_rows;
-
-      task_row_bounds[size++] = end_row;
-      start_row = end_row;
-   }
-
-   JX_Int num_tasks = size - 1;
-
-   JX_Real *dx_data = hthread_malloc(cluster_id, sizeof(JX_Real) * A_nnz, HT_MEM_RW);
-#pragma omp parallel for private(jj) num_threads(4)
+   /* DOT-split: per-nonzero product on CPU */
+   JX_Real *dy_data = (JX_Real *)malloc(A_nnz * sizeof(JX_Real));
    for (jj = 0; jj < A_nnz; jj++)
    {
-      dx_data[jj] = x_data[A_j[jj]];
+      dy_data[jj] = A_data[jj] * x_data[A_j[jj]];
    }
 
-   JX_Real *dy_data = hthread_malloc(cluster_id, sizeof(JX_Real) * A_nnz, HT_MEM_RW);
-   // memset(dy_data, 0.0, sizeof(JX_Real) * A_nnz);
-
-   JX_Int threads_id = hthread_group_create(cluster_id, coreNums);
-   JX_Int barrier_id = hthread_barrier_create(cluster_id);
-   unsigned long args[7];
-   args[0] = (unsigned long)coreNums;
-   args[1] = (unsigned long)num_tasks;
-   args[2] = (unsigned long)A_i;
-   args[3] = (unsigned long)A_data;
-   args[4] = (unsigned long)dx_data;
-   args[5] = (unsigned long)dy_data;
-   args[6] = (unsigned long)task_row_bounds;
-
-   hthread_group_exec(threads_id, "SpMV_DOT_FP64", 2, 5, args);
-   hthread_group_wait(threads_id);
-
-   // step 4 : 行规约
-   JX_Real row_sum;
-#define JX_SMP_PRIVATE i, j, row_sum
-#include "../../../include/jx_smp_forloop.h"
+   /* Row reduction */
    for (i = 0; i < num_rows; i++)
    {
-      row_sum = 0.0;
+      JX_Real row_sum = 0.0;
       for (j = A_i[i]; j < A_i[i + 1]; j++)
       {
          row_sum += dy_data[j];
       }
-
-      if (beta == 0.0)
-      {
-         y_data[i] = alpha * row_sum;
-      }
-      else
-      {
-         y_data[i] = beta * y_data[i] + alpha * row_sum;
-      }
+      y_data[i] += row_sum;
    }
 
-   hthread_barrier_destroy(barrier_id);
-   hthread_group_destroy(threads_id);
+   free(dy_data);
 
-   hthread_free(dx_data);
-   hthread_free(dy_data);
-   hthread_free(task_row_bounds);
+   if (alpha != 1.0)
+   {
+      for (i = 0; i < num_rows; i++) y_data[i] *= alpha;
+   }
 
-   return 0;
+   return ierr;
 }
