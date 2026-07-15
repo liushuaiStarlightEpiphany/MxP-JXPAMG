@@ -529,7 +529,6 @@ jxmp_BSRMatrixDtoF(jx_BSRMatrix *A, jxf_BSRMatrix *B, JXF_Int copy_data)
     // 如果需要，转换浮点数数据
     if (copy_data && A_data && B_data) {
         JXF_Int data_size = nnz * blk_size * blk_size;
-        #pragma omp parallel for
         for (JXF_Int i = 0; i < data_size; i++) {
             B_data[i] = (JXF_Real)A_data[i];  // double -> float
         }
@@ -755,7 +754,6 @@ int solve_with_ir_mixed_precision(
     // }
 
     // 1. 创建单精度矩阵（使用双精度矩阵的结构信息）
-    double IR_cprgmres_start = MPI_Wtime();
     jxf_ParBSRMatrix* A_float = jxf_ParBSRMatrixCreate(
         A_double->comm,
         jx_ParBSRMatrixBlockSize(A_double),
@@ -821,7 +819,7 @@ int solve_with_ir_mixed_precision(
     
     // 开始计时
         // BiCGSTAB设置阶段
-    // double IR_cprgmres_start = MPI_Wtime(); // moved earlier
+    double IR_cprgmres_start = MPI_Wtime();
 
 
     // 在IR主循环外作setup？
@@ -853,7 +851,7 @@ int solve_with_ir_mixed_precision(
         
         if (setup_result != JXF_SUCCESS) {
             if (myid == 0) printf("Error setting up CPR preconditioner\n");
-            // _exit(0);
+            // MPI_Abort(MPI_COMM_WORLD, 0);
             return 1;
         }
            
@@ -1134,6 +1132,7 @@ int main(int argc, char** argv)
     MPI_Init(&argc, &argv);
     
     int myid, size;
+    double total_start;
     MPI_Comm_rank(MPI_COMM_WORLD, &myid);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     
@@ -1151,7 +1150,7 @@ int main(int argc, char** argv)
             printf("  rhs_file: right-hand side file (optional)\n");
             printf("  stage2_type: 2=BGS(单精), 4=双精BGS, 5=双精HSGS (default: 2)\n");
         }
-        _exit(0);
+        MPI_Abort(MPI_COMM_WORLD, 0);
         return 1;
     }
     
@@ -1185,7 +1184,7 @@ int main(int argc, char** argv)
         
         if (!A_bsr) {
             printf("Error reading BSR matrix from %s\n", filename);
-            _exit(1);
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
         
         printf("BSR Matrix Info (myid 0):\n");
@@ -1260,14 +1259,14 @@ int main(int argc, char** argv)
         // jx_Vector* b_Ser_orig = jx_SeqVectorDuplicate(b_Ser);
         
         // 执行解耦（同时修改矩阵和右端项）
+        total_start = MPI_Wtime();
         double decoup_start = MPI_Wtime();
         JX_Int decoup_result = jx_BSRMatrixDecouple(A_bsr, b_Ser, decoup_type, is_thermal);
         double decoup_end = MPI_Wtime();
         
         if (decoup_result != JX_SUCCESS) {
             printf("Error applying decoupling to serial system\n");
-            // cleanup error, but solver may have completed
-        _exit(1);
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
         
         printf("  Decoupling completed in %.6f seconds\n", decoup_end - decoup_start);
@@ -1300,7 +1299,7 @@ int main(int argc, char** argv)
         
         // if (!read_success) {
         //     if (myid == 0) printf("Error during matrix reading/decoupling\n");
-        //     _exit(0);
+        //     MPI_Abort(MPI_COMM_WORLD, 0);
         //     return 1;
         // }
     }
@@ -1327,7 +1326,7 @@ int main(int argc, char** argv)
     
     if (!A_parbsr) {
         if (myid == 0) printf("Error creating parallel BSR matrix\n");
-        _exit(0);
+        MPI_Abort(MPI_COMM_WORLD, 0);
         return 1;
     }
     
@@ -1355,8 +1354,7 @@ int main(int argc, char** argv)
     
     if (!par_rhs || !par_sol) {
         printf("Rank %d: ERROR: Failed to create parallel vectors!\n", myid);
-        // cleanup error, but solver may have completed
-        _exit(1);
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
 
@@ -1382,7 +1380,7 @@ int main(int argc, char** argv)
     // IR参数
     int max_ir_iterations = 100;
     Real_double ir_tolerance = 1e-4;
-    int inner_max_iterations = 3;
+    int inner_max_iterations = 2;
     Real_float inner_tolerance = 1e-2;
     
     // 调用混合精度求解
@@ -1392,6 +1390,9 @@ int main(int argc, char** argv)
         inner_max_iterations, inner_tolerance,
         stage2_type);
     
-    _exit(0);
+    fflush(stdout);
+    double total_end = MPI_Wtime();
+    if (myid == 0) printf("Total time (setup+solve): %.6f seconds\n", total_end - total_start);
+    MPI_Abort(MPI_COMM_WORLD, 0);
     return result;
 }
