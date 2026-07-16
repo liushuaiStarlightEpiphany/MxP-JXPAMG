@@ -824,9 +824,9 @@ int main(int argc, char *argv[])
 
       JX_Int saved_spmv_type, saved_dot_type;
       saved_spmv_type = jx_spmv_type;
-      saved_dot_type = dot_type;
+      saved_dot_type = jx_dot_type;
       jx_spmv_type = 1;
-      dot_type = 1;
+      jx_dot_type = 1;
 
       JX_PAMGCreate(&amg_solver);
       if (restri_type)
@@ -892,7 +892,7 @@ int main(int argc, char *argv[])
       JX_GMRESGetFinalRelativeResidualNorm(solver, &final_res_norm);
 
       jx_spmv_type = saved_spmv_type;
-      dot_type = saved_dot_type;
+      jx_dot_type = saved_dot_type;
 
       if (print_level == 0 && myid == 0)
       {
@@ -1323,9 +1323,9 @@ int main(int argc, char *argv[])
 
       JX_Int saved_spmv_type, saved_dot_type;
       saved_spmv_type = jx_spmv_type;
-      saved_dot_type = dot_type;
+      saved_dot_type = jx_dot_type;
       jx_spmv_type = 1;
-      dot_type = 1;
+      jx_dot_type = 1;
 
       JX_PAMGCreate(&amg_solver);
       JX_PAMGSetMaxLevels(amg_solver, max_levels);
@@ -1383,7 +1383,7 @@ int main(int argc, char *argv[])
       JX_BiCGSTABGetFinalRelativeResidualNorm(solver, &final_res_norm);
 
       jx_spmv_type = saved_spmv_type;
-      dot_type = saved_dot_type;
+      jx_dot_type = saved_dot_type;
 
       if (print_level == 0 && myid == 0)
       {
