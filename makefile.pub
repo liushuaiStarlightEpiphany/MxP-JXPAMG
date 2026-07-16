@@ -15,8 +15,8 @@
 # JXPAMG directory and MPI diectory
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-JXPAMGDIR   = /vol8/home/xtu_pcy/TH-MXP-JXPAMG/jxpamg-basic-D
-JXFPAMGDIR  = /vol8/home/xtu_pcy/TH-MXP-JXPAMG/jxpamg-basic-F
+JXPAMGDIR   = /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/jxpamg-basic-D
+JXFPAMGDIR  = /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/jxpamg-basic-F
 
 JXPAMG_USE_MPI = YES
 ifdef JXPAMG_USE_MPI
@@ -395,4 +395,4 @@ FFLAGS = ${FDEFS} ${F_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 JXPAMGLIB  = -L ${JXPAMGDIR}/lib -lJXPAMG
 JXFPAMGLIB = -L ${JXFPAMGDIR}/lib -lJXFPAMG
-ALLLIBS    =  ${JXPAMGLIB} ${JXFPAMGLIB} ${LIBS2JXPAMG}
+ALLLIBS    =  ${JXPAMGLIB} ${JXFPAMGLIB} /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/pangulu-20251020--/final_test/PanguLU-mixprecision/lib/libpangulu.a /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/pangulu-20251020--/final_test/PanguLU_env/lib/libopenblas.a /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/pangulu-20251020--/final_test/PanguLU_env/lib/libmetis.a /vol8/home/xtu_pcy/l_s/pangulu/pangulu2/pangulu-20251020--/final_test/PanguLU_env/lib/libGKlib.a ${LIBS2JXPAMG}
