@@ -123,6 +123,7 @@ int main(int argc, char *argv[])
    JX_Int max_levels;
    JX_Int cycle_type;
    JX_Int relax_type;
+JX_Int crlx_type;
    JX_Int measure_type;
    JX_Int rap2;
    JX_Int num_functions;
@@ -200,6 +201,7 @@ int main(int argc, char *argv[])
    max_levels = 25;  /* 最大网格层数 */
    cycle_type = 1;   /* Cycle 类型  1: V_Cycle; 2：W_Cycle */
    relax_type = 3;   /* Relax 类型  3: hGS; 6：hSGS */
+   crlx_type       = 9;
    measure_type = 0; /* 影响值的计算方式 0：局部；1：全局 */
    rap2 = 0;         /* RAP计算方式  0：RAP；1：先算Q=AP，再算RQ */
    num_functions = 1;
@@ -344,6 +346,11 @@ int main(int argc, char *argv[])
       {
          arg_index++;
          relax_type = atoi(argv[arg_index++]);
+      }
+      else if (strcmp(argv[arg_index], "-crlx") == 0)
+      {
+         arg_index++;
+         crlx_type = atoi(argv[arg_index++]);
       }
       else if (strcmp(argv[arg_index], "-ai_rlx") == 0)
       {
@@ -656,7 +663,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);  /* sweep for "coarsest" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); /* relax_type for "down" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); /* relax_type for "up" */
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);          /* relax_type for "coarsest" */
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);          /* relax_type for "coarsest" */
       //------------------------------------------------------------
       //    JX_PAMG Setup
       //------------------------------------------------------------
@@ -756,7 +763,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);  /* sweep for "coarsest" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); /* relax_type for "down" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); /* relax_type for "up" */
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);          /* relax_type for "coarsest" */
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);          /* relax_type for "coarsest" */
       JX_PCGCreate(comm, &solver);
 
       JX_PCGSetMaxIter(solver, max_iter);
@@ -908,7 +915,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);
       JX_PCGCreate(comm, &solver);
       JX_PCGSetMaxIter(solver, max_iter); JX_PCGSetTol(solver, tol);
       JX_PCGSetTwoNorm(solver, twonorm); JX_PCGSetLogging(solver, 1);
@@ -969,7 +976,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);
 
       JX_GMRESCreate(comm, &solver);
       JX_GMRESSetKDim(solver, k_dim);
@@ -1077,7 +1084,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);  /* sweep for "coarsest" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); /* relax_type for "down" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); /* relax_type for "up" */
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);          /* relax_type for "coarsest" */
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);          /* relax_type for "coarsest" */
 
       JX_GMRESCreate(comm, &solver);
       JX_GMRESSetKDim(solver, k_dim);
@@ -1325,7 +1332,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);  /* sweep for "coarsest" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); /* relax_type for "down" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); /* relax_type for "up" */
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);          /* relax_type for "coarsest" */
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);          /* relax_type for "coarsest" */
 
       JX_BiCGSTABCreate(comm, &solver);
       JX_BiCGSTABSetMaxIter(solver, max_iter);
@@ -1530,7 +1537,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);
 
       JX_BiCGSTABCreate(comm, &solver);
       JX_BiCGSTABSetMaxIter(solver, max_iter);
@@ -1613,7 +1620,7 @@ int main(int argc, char *argv[])
       JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);  /* sweep for "coarsest" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1); /* relax_type for "down" */
       JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2); /* relax_type for "up" */
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);          /* relax_type for "coarsest" */
+      JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);          /* relax_type for "coarsest" */
 
       JX_ParCSRFlexGMRESCreate(comm, &solver);
       JX_FlexGMRESSetKDim(solver, k_dim);
