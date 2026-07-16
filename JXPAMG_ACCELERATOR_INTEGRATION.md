@@ -528,3 +528,53 @@ yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong_D \
 | `-rlx 6 -crlx 109` | 6 (hSGS) | 6 (hSGS) | **109 (PanguLU)** | 粗层替换 |
 | `-rlx 3` | 3 (hGS) | 3 (hGS) | 9 (GE) | hGS 光滑 |
 | `-rlx 3 -crlx 109` | 3 (hGS) | 3 (hGS) | **109 (PanguLU)** | PanguLU 粗层 |
+
+## 库代码修改记录（非 git 仓库，需手动同步）
+
+以下修改在 `jxpamg-basic-D/csrc/amg/` 中，不在 git 仓库内，部署到新环境时需手动应用。
+
+### 1. `par_amg.c` — 保留用户设置的 spmt_rap_type
+
+**位置**：`csrc/amg/par_amg.c` 第 213 行
+
+```c
+// 修改前：
+spmt_rap_type = 1;
+// 修改后：
+spmt_rap_type = jx_ParAMGDataSpMtRapType(amg_data);
+if (spmt_rap_type == 0) spmt_rap_type = 1;  /* default KT if not user-set */
+```
+
+**原因**：`jx_hpPAMGSetup` 函数硬编码 `spmt_rap_type = 1`，导致用户通过 `JX_PAMGSetSpMtRapType()` 设置的值被覆盖。
+
+### 2. `par_amg_setup.c` — 修复 BeidouBLAS 分支不可达
+
+**位置**：`csrc/amg/par_amg_setup.c` 第 952 行和第 1103 行
+
+```c
+// 修改前：
+if (spmt_rap_type == 1 || spmt_rap_type == 3 || spmt_rap_type == 7)
+// 修改后：
+if (spmt_rap_type == 1)
+```
+
+**原因**：原条件包含 `3` 和 `7`，使后续的 BeidouBLAS type=3/7 分支成为死代码。
+
+### 3. `par_relax.c` — 添加 PanguLU 调试打印
+
+**位置**：`csrc/amg/par_relax.c` 第 109 行附近
+
+```c
+// 在 relax_type == 109 分支中添加：
+jx_printf("[PanguLU] relax_type=109: PanguLU coarse solver\n");
+```
+
+## solver_strong_D.c 参数支持汇总
+
+| 参数 | 作用 | 对应值 | 状态 |
+|------|------|--------|------|
+| `-rlx <n>` | down/up 光滑类型 | 0=Jac, 3=hGS, 6=hSGS | ✅ |
+| `-crlx <n>` | coarsest 求解器类型 | 9=GE, 109=PanguLU | ✅ |
+| `-rap2 <0/1>` | RAP 计算方式 | 0=标准, 1=先Q=AP再RQ | ✅ |
+| `-rap <n>` | SpMt RAP 控制 | 2=内置RAP, 102=BeidouBLAS | ✅ |
+| `-sid <n>` | 求解器 ID | 12/1012=CG, 22/1022=GMRES, 32/1032=BiCGSTAB | ✅ |
