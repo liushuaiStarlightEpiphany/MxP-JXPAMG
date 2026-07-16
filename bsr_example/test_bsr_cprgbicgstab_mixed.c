@@ -851,7 +851,7 @@ int solve_with_ir_mixed_precision(
         
         if (setup_result != JXF_SUCCESS) {
             if (myid == 0) printf("Error setting up CPR preconditioner\n");
-            // MPI_Abort(MPI_COMM_WORLD, 0);
+            // _exit(0);
             return 1;
         }
            
@@ -1139,7 +1139,7 @@ int main(int argc, char** argv)
             printf("  rhs_file: right-hand side file (optional)\n");
             printf("  stage2_type: 2=BGS(单精), 4=双精BGS, 5=双精HSGS (default: 2)\n");
         }
-        MPI_Abort(MPI_COMM_WORLD, 0);
+        _exit(0);
         return 1;
     }
     
@@ -1173,7 +1173,7 @@ int main(int argc, char** argv)
         
         if (!A_bsr) {
             printf("Error reading BSR matrix from %s\n", filename);
-            MPI_Abort(MPI_COMM_WORLD, 1);
+            _exit(1);
         }
         
         printf("BSR Matrix Info (myid 0):\n");
@@ -1255,7 +1255,7 @@ int main(int argc, char** argv)
         
         if (decoup_result != JX_SUCCESS) {
             printf("Error applying decoupling to serial system\n");
-            MPI_Abort(MPI_COMM_WORLD, 1);
+            _exit(1);
         }
         
         printf("  Decoupling completed in %.6f seconds\n", decoup_end - decoup_start);
@@ -1288,7 +1288,7 @@ int main(int argc, char** argv)
         
         // if (!read_success) {
         //     if (myid == 0) printf("Error during matrix reading/decoupling\n");
-        //     MPI_Abort(MPI_COMM_WORLD, 0);
+        //     _exit(0);
         //     return 1;
         // }
     }
@@ -1315,7 +1315,7 @@ int main(int argc, char** argv)
     
     if (!A_parbsr) {
         if (myid == 0) printf("Error creating parallel BSR matrix\n");
-        MPI_Abort(MPI_COMM_WORLD, 0);
+        _exit(0);
         return 1;
     }
     
@@ -1343,7 +1343,7 @@ int main(int argc, char** argv)
     
     if (!par_rhs || !par_sol) {
         printf("Rank %d: ERROR: Failed to create parallel vectors!\n", myid);
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        _exit(1);
     }
 
 
@@ -1382,6 +1382,6 @@ int main(int argc, char** argv)
     fflush(stdout);
     if (myid == 0) printf("Total time (setup+solve): %.6f seconds\n", total_end - total_start);
     double total_end = MPI_Wtime();
-    MPI_Abort(MPI_COMM_WORLD, 0);
+    _exit(0);
     return result;
 }
