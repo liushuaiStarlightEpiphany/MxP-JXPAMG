@@ -1071,17 +1071,6 @@ int solve_with_ir_mixed_precision(
 
 
     // 5. 清理内存
-    jxf_ParBSRMatrixDestroy(A_float);
-    jxf_ParVectorDestroy(x_float);
-    jxf_ParVectorDestroy(r_float);
-    jx_ParVectorDestroy(r_double);
-    jx_ParVectorDestroy(dx_double);
-    if (g_double_r) { jx_ParVectorDestroy(g_double_r); g_double_r = NULL; }
-    if (g_double_x) { jx_ParVectorDestroy(g_double_x); g_double_x = NULL; }
-    if (g_double_w) { jx_ParVectorDestroy(g_double_w); g_double_w = NULL; }
-    g_double_A = NULL;
-    JXF_BiCGSTABDestroy(bicgstab_solver);
-    JXF_CPRDestroy(&cpr);
     
     return 0;
 }
@@ -1391,8 +1380,8 @@ int main(int argc, char** argv)
         stage2_type);
     
     fflush(stdout);
-    double total_end = MPI_Wtime();
     if (myid == 0) printf("Total time (setup+solve): %.6f seconds\n", total_end - total_start);
+    double total_end = MPI_Wtime();
     MPI_Abort(MPI_COMM_WORLD, 0);
     return result;
 }
