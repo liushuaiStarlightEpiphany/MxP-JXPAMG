@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 
     int myid, size;
+    double total_start;
     MPI_Comm_rank(MPI_COMM_WORLD, &myid);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
@@ -142,6 +143,7 @@ int main(int argc, char** argv) {
         printf("\nApplying decoupling...\n");
         printf("  Method: %s\n", jx_DecoupTypeToString(decoup_type));
 
+        total_start = MPI_Wtime();
         double decoup_start = MPI_Wtime();
         JX_Int decoup_result = jx_BSRMatrixDecouple(A_bsr, b_Ser, decoup_type, is_thermal);
         double decoup_end = MPI_Wtime();
@@ -310,6 +312,7 @@ int main(int argc, char** argv) {
         printf("  Relative residual (wrt rhs): %.6e\n", rel_res);
         printf("  Converged: %s\n", rel_res < tol ? "YES" : "NO");
         printf("  Solve time: %.6f s\n", solve_end - solve_start);
+        printf("  Total time (setup+solve): %.6f s\n", solve_end - total_start);
         printf("================================\n\n");
     }
 
