@@ -32,16 +32,16 @@ ALL = test_bsr_cprbicgstab test_bsr_cprbicgstab_hybrid test_bsr_cprgbicgstab_mix
 all: $(ALL)
 
 test_bsr_cprbicgstab: test_bsr_cprbicgstab.o
-	mpicc -fopenmp -o $@ $< $(LDLIBS)
+	/vol8/appsoftware/mpi-x/bin/mpicc -fopenmp -o $@ $< $(LDLIBS)
 
 test_bsr_cprbicgstab_hybrid: test_bsr_cprbicgstab_hybrid.o
-	mpicc -fopenmp -o $@ $< $(LDLIBS)
+	/vol8/appsoftware/mpi-x/bin/mpicc -fopenmp -o $@ $< $(LDLIBS)
 
 test_bsr_cprgbicgstab_mixed: test_bsr_cprgbicgstab_mixed.o
-	mpicc -fopenmp -o $@ $< $(LDLIBS)
+	/vol8/appsoftware/mpi-x/bin/mpicc -fopenmp -o $@ $< $(LDLIBS)
 
 .c.o:
-	mpicc -fopenmp -o $@ -c $(BASE_CFLAGS) $(CFLAGS_EXTRA) $<
+	/vol8/appsoftware/mpi-x/bin/mpicc -fopenmp -o $@ -c $(BASE_CFLAGS) $(CFLAGS_EXTRA) $<
 
 test_bsr_cprbicgstab_hybrid.o: CFLAGS_EXTRA = $(JXF_CFLAGS)
 test_bsr_cprgbicgstab_mixed.o: CFLAGS_EXTRA = $(JXF_CFLAGS)
