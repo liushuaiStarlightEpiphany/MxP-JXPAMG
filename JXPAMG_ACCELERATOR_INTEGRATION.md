@@ -499,3 +499,32 @@ python3 perfbench.py -s /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/bsr_example/pb_ir.slur
 - **双精度库在前**：链接顺序 `-lJXPAMG -lJXFPAMG`（双精度在前），确保 `printf` 使用双精度版本，避免浮点格式错误
 - **`--allow-multiple-definition`**：因双精度和单精度库都定义了 `printf`/`fprintf`，需此标志允许重复符号
 - **测试数据**：通过符号链接 `spe10_bsr → /vol8/home/xtu_pcy/l_s/jxpamg_all/spe10_bsr`
+
+### solver_strong_D.c 粗层求解器参数
+
+`solver_strong_D`（编译自 `src/solver_strong_D.c`）使用独立的 `-crlx` 参数控制最粗层的求解器类型，与 `-rlx`（控制 down/up 光滑类型）分离。
+
+```c
+JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);   // down → 由 -rlx 控制
+JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);   // up   → 由 -rlx 控制
+JX_PAMGSetCycleRelaxType(amg_solver, crlx_type, 3);    // 最粗层 → 由 -crlx 控制
+```
+
+#### 命令示例
+
+```bash
+# 标准：hSGS 光滑 + GE 粗层
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong_D \
+  -fromonecsrfile ... -rhsfromfile ... -sid 22 -rlx 6
+
+# PanguLU 粗层：hSGS 光滑 + PanguLU 粗层
+yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong_D \
+  -fromonecsrfile ... -rhsfromfile ... -sid 22 -rlx 6 -crlx 109
+```
+
+| 命令 | down | up | coarsest | 说明 |
+|------|------|----|---------|------|
+| `-rlx 6` | 6 (hSGS) | 6 (hSGS) | 9 (GE) | 默认 |
+| `-rlx 6 -crlx 109` | 6 (hSGS) | 6 (hSGS) | **109 (PanguLU)** | 粗层替换 |
+| `-rlx 3` | 3 (hGS) | 3 (hGS) | 9 (GE) | hGS 光滑 |
+| `-rlx 3 -crlx 109` | 3 (hGS) | 3 (hGS) | **109 (PanguLU)** | PanguLU 粗层 |
