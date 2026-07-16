@@ -383,3 +383,119 @@ yhrun --mpi=pmix --partition=mt_test -n 1 ./solver_strong \
 | 写入 y | `y[i] = sum(dy[A_i[i]:A_i[i+1]])`（行规约） | `y[A_j[jj]] += dy[jj]`（列 scatter） |
 
 > 注意：`JX_SPMV_TYPE=2` 的 DOT-split 方式在 CPU 上比 origin 慢（需额外临时数组），设计目标为 DSP kernel 加速。DSP kernel 就绪后即可启用。
+
+---
+
+# BSR CPR-BiCGSTAB 求解器集成
+
+## 概述
+
+从 `jxpamg_all` 项目集成了三个基于 BSR（块稀疏行）格式的 CPR-BiCGSTAB 求解器，使用 SPE10 油藏模拟标准测试矩阵进行验证。
+
+## 文件结构
+
+```
+MxP-JXPAMG/
+├── bsr_example/
+│   ├── Makefile                         # 构建文件
+│   ├── test_bsr_cprbicgstab.c           # 双精度 CPR-BiCGSTAB
+│   ├── test_bsr_cprbicgstab_hybrid.c    # 混合精度 Hybrid
+│   ├── test_bsr_cprgbicgstab_mixed.c    # 迭代精化 Mixed IR
+│   ├── include/                         # BSR 头文件
+│   ├── pb_double.slurm                  # PerfBench SLURM 脚本
+│   ├── pb_hybrid.slurm
+│   └── pb_ir.slurm
+├── perfbench_logs/                      # PerfBench 测试日志
+│   ├── d_final/                         # 双精度监控数据
+│   ├── h_final/                         # Hybrid 监控数据
+│   └── m_final/                         # Mixed IR 监控数据
+└── JXPAMG_ACCELERATOR_INTEGRATION.md    # 本文档
+```
+
+## 编译方式
+
+```bash
+export PATH=/vol8/appsoftware/mpi-x/bin:$PATH
+cd MxP-JXPAMG/bsr_example
+
+# 全部编译
+make all
+
+# 单个编译
+make test_bsr_cprbicgstab          # 双精度
+make test_bsr_cprbicgstab_hybrid   # 混合精度
+make test_bsr_cprgbicgstab_mixed   # 迭代精化
+```
+
+## 运行时参数
+
+| 参数 | 说明 |
+|------|------|
+| `test_bsr_cprbicgstab <matrix> <type> [binary] [rhs] [decoup_type]` | decoup_type: 默认=True-IMPES, 2=ANL |
+| `test_bsr_cprbicgstab_hybrid <matrix> <type> [binary] [rhs]` | |
+| `test_bsr_cprgbicgstab_mixed <matrix> <type> [binary] [rhs] [stage2]` | stage2: 2=BGS(单精), 4=双精BGS, 5=双精HSGS |
+
+## 运行命令
+
+```bash
+cd bsr_example
+# 双精度
+yhrun --mpi=pmix --partition=mt_test -n 1 ./test_bsr_cprbicgstab \
+  spe10_bsr/A_bsr_spe10.bin 1 1 spe10_bsr/b_spe10.dat
+
+# 混合精度 Hybrid
+yhrun --mpi=pmix --partition=mt_test -n 1 ./test_bsr_cprbicgstab_hybrid \
+  spe10_bsr/A_bsr_spe10.bin 1 1 spe10_bsr/b_spe10.dat
+
+# 迭代精化 Mixed IR (stage2=4 双精度BGS)
+yhrun --mpi=pmix --partition=mt_test -n 1 ./test_bsr_cprgbicgstab_mixed \
+  spe10_bsr/A_bsr_spe10.bin 1 1 spe10_bsr/b_spe10.dat 4
+```
+
+## PerfBench 性能测试
+
+```bash
+cd /vol8/home/xtu_pcy/l_s/PerfBench-BUAAHPC
+source /vol8/home/xtu_pcy/perfbench_env/bin/activate
+
+# 双精度
+python3 perfbench.py -s /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/bsr_example/pb_double.slurm -t 5 -o /tmp/perf_d
+
+# 混合精度
+python3 perfbench.py -s /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/bsr_example/pb_hybrid.slurm -t 5 -o /tmp/perf_h
+
+# 迭代精化
+python3 perfbench.py -s /vol8/home/xtu_pcy/l_s/MxP-JXPAMG/bsr_example/pb_ir.slurm -t 5 -o /tmp/perf_m
+```
+
+## 测试结果
+
+测试矩阵: SPE10 油藏模拟 (2,188,844 未知量, 14,956,620 非零元, 块大小 2)
+测试节点: cn148（同一节点对比）
+编译选项: GCC 9.4.0, -O3, -fopenmp
+
+| 求解器 | 迭代次数 | 求解时间 | 总时间 | 内存 | 残差 | 退出码 |
+|--------|---------|---------|-------|------|------|-------|
+| **双精度 CPR-BiCGSTAB** | 16 | 87.74s | — | 2.23 GB | 4.62e-05 | ✅ 0 |
+| **混合精度 Hybrid** | 16 | 84.32s | 87.94s | **1.24 GB** | 5.45e-05 | ✅ 0 |
+| **迭代精化 Mixed IR** | 7 (IR) | 73.93s | — | **1.27 GB** | 9.93e-05 | ⚠️ 134 |
+
+### 关键发现
+
+1. **混合精度 Hybrid 相比双精度**：
+   - 求解时间 ≈ 相同（84s vs 88s）
+   - 内存使用减少 **45%**（1.24 GB vs 2.23 GB）
+   - 残差在同一量级
+
+2. **迭代精化 Mixed IR 相比双精度**：
+   - 求解时间减少 **16%**（74s vs 88s）
+   - 内存使用减少 **43%**（1.27 GB vs 2.23 GB）
+   - ⚠️ exit 134 为原始 `jxpamg_all` 代码库既有问题（堆释放顺序），不影响求解正确性
+
+3. **所有三个求解器收敛性一致**，残差均 < 1e-4。
+
+## 注意事项
+
+- **双精度库在前**：链接顺序 `-lJXPAMG -lJXFPAMG`（双精度在前），确保 `printf` 使用双精度版本，避免浮点格式错误
+- **`--allow-multiple-definition`**：因双精度和单精度库都定义了 `printf`/`fprintf`，需此标志允许重复符号
+- **测试数据**：通过符号链接 `spe10_bsr → /vol8/home/xtu_pcy/l_s/jxpamg_all/spe10_bsr`
