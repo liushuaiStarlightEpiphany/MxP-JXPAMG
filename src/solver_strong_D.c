@@ -1,3 +1,4 @@
+#include <string.h>
 //========================================================================//
 //  JXPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
 //  Institute of Applied Physics and Computational Mathematics            //
@@ -241,6 +242,7 @@ int main(int argc, char *argv[])
    solver_id = 22;
    problem_id = -1; /* 默认为-1，需要通过命令行读取矩阵请勿修改此参数*/
    file_base = 0;
+      { const char *_p = MatFile; while (*_p) _p++; if (_p - MatFile > 4 && _p[-4] == '.' && _p[-3] == 'b' && _p[-2] == 'i' && _p[-1] == 'n') file_base = 2; }
 #if JX_USING_OPENMP || defined(JX_USING_PGCC_SMP)
    nthreads = 1; /* 线程数 */
 #endif
@@ -481,6 +483,14 @@ int main(int argc, char *argv[])
    {
       MatFile = argv[build_matrix_arg_index];
       file_base = 0;
+      /* check .bin extension */
+      if (MatFile)
+      {
+         const char *_p = MatFile;
+         while (*_p) _p++;
+         if (_p - MatFile > 4 && _p[-4] == '.' && _p[-3] == 'b' && _p[-2] == 'i' && _p[-1] == 'n')
+            file_base = 2;
+      }
    }
    else if (problem_id < 0)
    {
