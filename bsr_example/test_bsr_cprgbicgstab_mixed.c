@@ -851,7 +851,7 @@ int solve_with_ir_mixed_precision(
         
         if (setup_result != JXF_SUCCESS) {
             if (myid == 0) printf("Error setting up CPR preconditioner\n");
-            // MPI_Abort(MPI_COMM_WORLD, 0);
+            // _exit(0);
             return 1;
         }
            
@@ -1150,7 +1150,7 @@ int main(int argc, char** argv)
             printf("  rhs_file: right-hand side file (optional)\n");
             printf("  stage2_type: 2=BGS(单精), 4=双精BGS, 5=双精HSGS (default: 2)\n");
         }
-        MPI_Abort(MPI_COMM_WORLD, 0);
+        _exit(0);
         return 1;
     }
     
@@ -1299,7 +1299,7 @@ int main(int argc, char** argv)
         
         // if (!read_success) {
         //     if (myid == 0) printf("Error during matrix reading/decoupling\n");
-        //     MPI_Abort(MPI_COMM_WORLD, 0);
+        //     _exit(0);
         //     return 1;
         // }
     }
@@ -1326,7 +1326,7 @@ int main(int argc, char** argv)
     
     if (!A_parbsr) {
         if (myid == 0) printf("Error creating parallel BSR matrix\n");
-        MPI_Abort(MPI_COMM_WORLD, 0);
+        _exit(0);
         return 1;
     }
     
@@ -1391,7 +1391,8 @@ int main(int argc, char** argv)
         stage2_type);
     
     double total_end = MPI_Wtime();
-    if (myid == 0) printf("Total time (setup+solve): %.6f seconds\n", total_end - total_start);
-    MPI_Abort(MPI_COMM_WORLD, 0);
+    fflush(stdout);
+    if (myid == 0) fprintf(stderr, "Total time (setup+solve): %.6f seconds\n", total_end - total_start);
+    _exit(0);
     return result;
 }
