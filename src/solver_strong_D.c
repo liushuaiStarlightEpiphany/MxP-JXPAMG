@@ -1,4 +1,3 @@
-#include <string.h>
 //========================================================================//
 //  JXPAMG(IAPCM & XTU Parallel Algebraic Multigrid) (c) 2009-2013        //
 //  Institute of Applied Physics and Computational Mathematics            //
@@ -242,7 +241,14 @@ int main(int argc, char *argv[])
    solver_id = 22;
    problem_id = -1; /* 默认为-1，需要通过命令行读取矩阵请勿修改此参数*/
    file_base = 0;
-      { const char *_p = MatFile; while (*_p) _p++; if (_p - MatFile > 4 && _p[-4] == '.' && _p[-3] == 'b' && _p[-2] == 'i' && _p[-1] == 'n') file_base = 2; }
+   /* check .bin extension */
+   if (MatFile)
+   {
+      const char *_p = MatFile;
+      while (*_p) _p++;
+      if (_p - MatFile > 4 && _p[-4] == '.' && _p[-3] == 'b' && _p[-2] == 'i' && _p[-1] == 'n')
+         file_base = 2;
+   }
 #if JX_USING_OPENMP || defined(JX_USING_PGCC_SMP)
    nthreads = 1; /* 线程数 */
 #endif
@@ -825,6 +831,51 @@ int main(int argc, char *argv[])
    }
    break;
 
+   case 14: /* Euclid-CG */
+   {
+      if (myid == 0)
+         jx_printf("\n >>> Solver: Euclid-CG \n\n");
+
+      starttime = jx_MPI_Wtime();
+
+      JX_EuclidCreate(comm, &euclid_solver);
+      // JX_EuclidSetParams(euclid_solver, argc, argv);
+      JX_EuclidSetLevel(euclid_solver, euclid_level);
+      JX_EuclidSetBJ(euclid_solver, euclid_bj);
+
+      JX_PCGCreate(comm, &solver);
+      JX_PCGSetMaxIter(solver, max_iter);
+      JX_PCGSetTol(solver, tol);
+      JX_PCGSetTwoNorm(solver, twonorm); // 0: B 范数； 1：l2 范数
+      JX_PCGSetLogging(solver, 1);
+      JX_PCGSetPrintLevel(solver, print_level);
+
+      JX_PCGSetPrecond(solver, (JX_PtrToSolverFcn)JX_EuclidSolve,
+                       (JX_PtrToSolverFcn)JX_EuclidSetup, euclid_solver);
+
+      JX_EuclidSetup(euclid_solver, (JX_hpCSRMatrix)hp_matrix);
+
+      JX_PCGSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+
+      endtime = jx_MPI_Wtime();
+      jx_GetWallTime(comm, "Euclid-CG Setup", starttime, endtime, 0, 2);
+
+      starttime = jx_MPI_Wtime();
+
+      JX_PCGSolve(solver, (JX_Matrix)hp_matrix, // preOperater
+                  (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+
+      endtime = jx_MPI_Wtime();
+      jx_GetWallTime(comm, "Euclid-CG Solve", starttime, endtime, 0, 2);
+
+      JX_PCGGetNumIterations(solver, &num_iterations);
+      JX_PCGGetFinalRelativeResidualNorm(solver, &final_res_norm);
+
+      JX_EuclidDestroy(euclid_solver);
+      JX_PCGDestroy(solver);
+   }
+   break;
+
    case 1022: /* PAMG-GMRES (heterogeneous SpMV/dot) */
    {
       if (myid == 0)
@@ -839,12 +890,6 @@ int main(int argc, char *argv[])
       jx_dot_type = 1;
 
       JX_PAMGCreate(&amg_solver);
-      if (restri_type)
-      {
-         jx_assert(restri_type >= 0);
-         JX_PAMGSetRestriction(amg_solver, restri_type);
-         JX_PAMGSetGridRelaxPoints(amg_solver, grid_relax_points);
-      }
       JX_PAMGSetMaxLevels(amg_solver, max_levels);
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
@@ -853,7 +898,6 @@ int main(int argc, char *argv[])
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
-      /* JX_PAMGSetProlongationType(amg_solver, prolong_type); */
       JX_PAMGSetPMaxElmts(amg_solver, P_max_elmts);
       JX_PAMGSetAggNumLevels(amg_solver, agg_num_levels);
       JX_PAMGSetAIMeasureType(amg_solver, ai_measure_type);
@@ -912,51 +956,6 @@ int main(int argc, char *argv[])
 
       JX_PAMGDestroy(amg_solver);
       JX_GMRESDestroy(solver);
-   }
-   break;
-
-   case 14: /* Euclid-CG */
-   {
-      if (myid == 0)
-         jx_printf("\n >>> Solver: Euclid-CG \n\n");
-
-      starttime = jx_MPI_Wtime();
-
-      JX_EuclidCreate(comm, &euclid_solver);
-      // JX_EuclidSetParams(euclid_solver, argc, argv);
-      JX_EuclidSetLevel(euclid_solver, euclid_level);
-      JX_EuclidSetBJ(euclid_solver, euclid_bj);
-
-      JX_PCGCreate(comm, &solver);
-      JX_PCGSetMaxIter(solver, max_iter);
-      JX_PCGSetTol(solver, tol);
-      JX_PCGSetTwoNorm(solver, twonorm); // 0: B 范数； 1：l2 范数
-      JX_PCGSetLogging(solver, 1);
-      JX_PCGSetPrintLevel(solver, print_level);
-
-      JX_PCGSetPrecond(solver, (JX_PtrToSolverFcn)JX_EuclidSolve,
-                       (JX_PtrToSolverFcn)JX_EuclidSetup, euclid_solver);
-
-      JX_EuclidSetup(euclid_solver, (JX_hpCSRMatrix)hp_matrix);
-
-      JX_PCGSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
-
-      endtime = jx_MPI_Wtime();
-      jx_GetWallTime(comm, "Euclid-CG Setup", starttime, endtime, 0, 2);
-
-      starttime = jx_MPI_Wtime();
-
-      JX_PCGSolve(solver, (JX_Matrix)hp_matrix, // preOperater
-                  (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
-
-      endtime = jx_MPI_Wtime();
-      jx_GetWallTime(comm, "Euclid-CG Solve", starttime, endtime, 0, 2);
-
-      JX_PCGGetNumIterations(solver, &num_iterations);
-      JX_PCGGetFinalRelativeResidualNorm(solver, &final_res_norm);
-
-      JX_EuclidDestroy(euclid_solver);
-      JX_PCGDestroy(solver);
    }
    break;
 
@@ -1324,88 +1323,6 @@ int main(int argc, char *argv[])
    }
    break;
 
-   case 1032: /* PAMG-BiCGSTAB (heterogeneous SpMV/dot) */
-   {
-      if (myid == 0)
-         jx_printf("\n >>> Solver: PAMG-BiCGSTAB (heterogeneous) \n\n");
-
-      starttime = jx_MPI_Wtime();
-
-      JX_Int saved_spmv_type, saved_dot_type;
-      saved_spmv_type = jx_spmv_type;
-      saved_dot_type = jx_dot_type;
-      jx_spmv_type = 1;
-      jx_dot_type = 1;
-
-      JX_PAMGCreate(&amg_solver);
-      JX_PAMGSetMaxLevels(amg_solver, max_levels);
-      JX_PAMGSetMaxIter(amg_solver, 1);
-      JX_PAMGSetCycleType(amg_solver, cycle_type);
-      JX_PAMGSetMeasureType(amg_solver, measure_type);
-      JX_PAMGSetRAP2(amg_solver, rap2);
-      JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
-      JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
-      JX_PAMGSetInterpType(amg_solver, interp_type);
-      /* JX_PAMGSetProlongationType(amg_solver, prolong_type); */
-      JX_PAMGSetPMaxElmts(amg_solver, P_max_elmts);
-      JX_PAMGSetAggNumLevels(amg_solver, agg_num_levels);
-      JX_PAMGSetAIMeasureType(amg_solver, ai_measure_type);
-      JX_PAMGSetAIRelaxType(amg_solver, ai_relax_type);
-      JX_PAMGSetStrongThreshold(amg_solver, strong_threshold);
-      JX_PAMGSetMaxRowSum(amg_solver, max_row_sum);
-      JX_PAMGSetPrintLevel(amg_solver, amg_print_level);
-      JX_PAMGSetCoarsestSolverID(amg_solver, coarsestsolverid);
-      JX_PAMGSetCoarseThreshold(amg_solver, coarse_threshold);
-      JX_PAMGSetRelaxWt(amg_solver, relax_wt);
-      JX_PAMGSetOuterWt(amg_solver, outer_wt);
-      if (ns_down > -1)
-         JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);
-      if (ns_up > -1)
-         JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);
-      JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);
-      JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);
-      JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);
-      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);
-
-      JX_BiCGSTABCreate(comm, &solver);
-      JX_BiCGSTABSetMaxIter(solver, max_iter);
-      JX_BiCGSTABSetTol(solver, tol);
-      JX_BiCGSTABSetAbsoluteTol(solver, 0.0);
-      JX_BiCGSTABSetConvCriteria(solver, 0);
-      JX_BiCGSTABSetLogging(solver, 1);
-      JX_BiCGSTABSetPrintLevel(solver, print_level);
-      JX_BiCGSTABSetPrecond(solver, (JX_PtrToSolverFcn)JX_PAMGPrecond,
-                            (JX_PtrToSolverFcn)JX_PAMGSetup, amg_solver);
-
-      JX_PAMGSetup(amg_solver, (JX_hpCSRMatrix)hp_matrix);
-      JX_BiCGSTABSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
-
-      endtime = jx_MPI_Wtime();
-      jx_GetWallTime(comm, "PAMG-BiCGSTAB Setup", starttime, endtime, 0, 2);
-
-      starttime = jx_MPI_Wtime();
-      JX_BiCGSTABSolve(solver, (JX_Matrix)hp_matrix,
-                       (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
-      endtime = jx_MPI_Wtime();
-      jx_GetWallTime(comm, "PAMG-BiCGSTAB Solve", starttime, endtime, 0, 2);
-
-      JX_BiCGSTABGetNumIterations(solver, &num_iterations);
-      JX_BiCGSTABGetFinalRelativeResidualNorm(solver, &final_res_norm);
-
-      jx_spmv_type = saved_spmv_type;
-      jx_dot_type = saved_dot_type;
-
-      if (print_level == 0 && myid == 0)
-      {
-         jx_printf(" >>> num_iterations = %d\n", num_iterations);
-         jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
-      }
-
-      JX_PAMGDestroy(amg_solver);
-      JX_BiCGSTABDestroy(solver);
-   }
-   break;
-
    case 33: /* DS-BiCGSTAB */
    {
       if (myid == 0)
@@ -1518,6 +1435,87 @@ int main(int argc, char *argv[])
       }
 
       JX_EuclidDestroy(euclid_solver);
+      JX_BiCGSTABDestroy(solver);
+   }
+   break;
+
+   case 1032: /* PAMG-BiCGSTAB (heterogeneous SpMV/dot) */
+   {
+      if (myid == 0)
+         jx_printf("\n >>> Solver: PAMG-BiCGSTAB (heterogeneous) \n\n");
+
+      starttime = jx_MPI_Wtime();
+
+      JX_Int saved_spmv_type, saved_dot_type;
+      saved_spmv_type = jx_spmv_type;
+      saved_dot_type = jx_dot_type;
+      jx_spmv_type = 1;
+      jx_dot_type = 1;
+
+      JX_PAMGCreate(&amg_solver);
+      JX_PAMGSetMaxLevels(amg_solver, max_levels);
+      JX_PAMGSetMaxIter(amg_solver, 1);
+      JX_PAMGSetCycleType(amg_solver, cycle_type);
+      JX_PAMGSetMeasureType(amg_solver, measure_type);
+      JX_PAMGSetRAP2(amg_solver, rap2);
+      JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
+      JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
+      JX_PAMGSetInterpType(amg_solver, interp_type);
+      JX_PAMGSetPMaxElmts(amg_solver, P_max_elmts);
+      JX_PAMGSetAggNumLevels(amg_solver, agg_num_levels);
+      JX_PAMGSetAIMeasureType(amg_solver, ai_measure_type);
+      JX_PAMGSetAIRelaxType(amg_solver, ai_relax_type);
+      JX_PAMGSetStrongThreshold(amg_solver, strong_threshold);
+      JX_PAMGSetMaxRowSum(amg_solver, max_row_sum);
+      JX_PAMGSetPrintLevel(amg_solver, amg_print_level);
+      JX_PAMGSetCoarsestSolverID(amg_solver, coarsestsolverid);
+      JX_PAMGSetCoarseThreshold(amg_solver, coarse_threshold);
+      JX_PAMGSetRelaxWt(amg_solver, relax_wt);
+      JX_PAMGSetOuterWt(amg_solver, outer_wt);
+      if (ns_down > -1)
+         JX_PAMGSetCycleNumSweeps(amg_solver, ns_down, 1);
+      if (ns_up > -1)
+         JX_PAMGSetCycleNumSweeps(amg_solver, ns_up, 2);
+      JX_PAMGSetCycleNumSweeps(amg_solver, ns_coarse, 3);
+      JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 1);
+      JX_PAMGSetCycleRelaxType(amg_solver, relax_type, 2);
+      JX_PAMGSetCycleRelaxType(amg_solver, 9, 3);
+
+      JX_BiCGSTABCreate(comm, &solver);
+      JX_BiCGSTABSetMaxIter(solver, max_iter);
+      JX_BiCGSTABSetTol(solver, tol);
+      JX_BiCGSTABSetAbsoluteTol(solver, 0.0);
+      JX_BiCGSTABSetConvCriteria(solver, 0);
+      JX_BiCGSTABSetLogging(solver, 1);
+      JX_BiCGSTABSetPrintLevel(solver, print_level);
+      JX_BiCGSTABSetPrecond(solver, (JX_PtrToSolverFcn)JX_PAMGPrecond,
+                            (JX_PtrToSolverFcn)JX_PAMGSetup, amg_solver);
+
+      JX_PAMGSetup(amg_solver, (JX_hpCSRMatrix)hp_matrix);
+      JX_BiCGSTABSetup(solver, (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+
+      endtime = jx_MPI_Wtime();
+      jx_GetWallTime(comm, "PAMG-BiCGSTAB Setup", starttime, endtime, 0, 2);
+
+      starttime = jx_MPI_Wtime();
+      JX_BiCGSTABSolve(solver, (JX_Matrix)hp_matrix,
+                       (JX_Matrix)hp_matrix, (JX_Vector)par_rhs, (JX_Vector)par_sol);
+      endtime = jx_MPI_Wtime();
+      jx_GetWallTime(comm, "PAMG-BiCGSTAB Solve", starttime, endtime, 0, 2);
+
+      JX_BiCGSTABGetNumIterations(solver, &num_iterations);
+      JX_BiCGSTABGetFinalRelativeResidualNorm(solver, &final_res_norm);
+
+      jx_spmv_type = saved_spmv_type;
+      jx_dot_type = saved_dot_type;
+
+      if (print_level == 0 && myid == 0)
+      {
+         jx_printf(" >>> num_iterations = %d\n", num_iterations);
+         jx_printf(" >>> final_res_norm = %.4le\n", final_res_norm);
+      }
+
+      JX_PAMGDestroy(amg_solver);
       JX_BiCGSTABDestroy(solver);
    }
    break;
