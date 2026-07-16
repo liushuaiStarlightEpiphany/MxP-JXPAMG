@@ -650,6 +650,7 @@ JX_Int rap_control;
       JX_PAMGSetNumFunctions(amg_solver, num_functions);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
@@ -755,6 +756,7 @@ JX_Int rap_control;
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
@@ -911,6 +913,7 @@ JX_Int rap_control;
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
@@ -970,6 +973,7 @@ JX_Int rap_control;
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
@@ -1081,6 +1085,7 @@ JX_Int rap_control;
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
@@ -1333,6 +1338,7 @@ JX_Int rap_control;
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
@@ -1539,6 +1545,7 @@ JX_Int rap_control;
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
@@ -1623,6 +1630,7 @@ JX_Int rap_control;
       JX_PAMGSetMaxIter(amg_solver, 1);
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
+      jx_printf("[DEBUG] rap_control=%d, rap2=%d\n", rap_control, rap2);
       JX_PAMGSetRAP2(amg_solver, rap2);
       if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
       if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
