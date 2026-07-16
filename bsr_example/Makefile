@@ -10,8 +10,6 @@ MPIDIR      = /vol8/appsoftware/mpi-x
 
 JXPAMGINCLUDES = -I $(JXPAMG_ROOT) -I $(JXPAMGDIR)/include
 JXFPAMGINCLUDES = -I $(JXFPANG_ROOT) -I $(JXFPAMGDIR)/include
-JXPAMGLIB  = -L $(JXPAMGDIR)/lib -lJXPAMG
-JXFPAMGLIB = -L $(JXFPAMGDIR)/lib -lJXFPAMG
 MPILIB     = -L $(MPIDIR)/lib -lmpi
 
 BASE_CFLAGS = -O3 -fopenmp -Wall
@@ -24,7 +22,11 @@ BASE_CFLAGS += $(JXPAMGINCLUDES) $(JXFPAMGINCLUDES) -I $(MPIDIR)/include
 JXF_CFLAGS = -DJXF_USING_BIG_INT=0 -DJXF_USING_BIG_DOUBLE=0
 JXF_CFLAGS += -DJXF_SINGLE=0 -DJXF_USING_OPENMP=1
 
-LDLIBS = $(JXFPAMGLIB) $(JXPAMGLIB) $(MPILIB) -lm -lstdc++
+# 双精度库在前，单精度库在后（printf 从双精度库来，格式正确）
+JXPAMGLIB  = -L $(JXPAMGDIR)/lib -lJXPAMG
+JXFPAMGLIB = -L $(JXFPAMGDIR)/lib -lJXFPAMG
+
+LDLIBS = $(JXPAMGLIB) $(JXFPAMGLIB) $(MPILIB) -lm -lstdc++
 LDLIBS += -Wl,--allow-multiple-definition
 
 ALL = test_bsr_cprbicgstab test_bsr_cprbicgstab_hybrid test_bsr_cprgbicgstab_mixed

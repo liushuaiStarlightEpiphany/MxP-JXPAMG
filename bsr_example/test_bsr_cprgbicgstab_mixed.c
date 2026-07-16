@@ -851,7 +851,7 @@ int solve_with_ir_mixed_precision(
         
         if (setup_result != JXF_SUCCESS) {
             if (myid == 0) printf("Error setting up CPR preconditioner\n");
-            // _exit(0);
+            // MPI_Abort(MPI_COMM_WORLD, 0);
             return 1;
         }
            
@@ -1071,6 +1071,17 @@ int solve_with_ir_mixed_precision(
 
 
     // 5. 清理内存
+    jxf_ParBSRMatrixDestroy(A_float);
+    jxf_ParVectorDestroy(x_float);
+    jxf_ParVectorDestroy(r_float);
+    jx_ParVectorDestroy(r_double);
+    jx_ParVectorDestroy(dx_double);
+    if (g_double_r) { jx_ParVectorDestroy(g_double_r); g_double_r = NULL; }
+    if (g_double_x) { jx_ParVectorDestroy(g_double_x); g_double_x = NULL; }
+    if (g_double_w) { jx_ParVectorDestroy(g_double_w); g_double_w = NULL; }
+    g_double_A = NULL;
+    JXF_BiCGSTABDestroy(bicgstab_solver);
+    JXF_CPRDestroy(&cpr);
     
     return 0;
 }
@@ -1139,7 +1150,7 @@ int main(int argc, char** argv)
             printf("  rhs_file: right-hand side file (optional)\n");
             printf("  stage2_type: 2=BGS(单精), 4=双精BGS, 5=双精HSGS (default: 2)\n");
         }
-        _exit(0);
+        MPI_Abort(MPI_COMM_WORLD, 0);
         return 1;
     }
     
@@ -1173,7 +1184,7 @@ int main(int argc, char** argv)
         
         if (!A_bsr) {
             printf("Error reading BSR matrix from %s\n", filename);
-            _exit(1);
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
         
         printf("BSR Matrix Info (myid 0):\n");
@@ -1255,7 +1266,7 @@ int main(int argc, char** argv)
         
         if (decoup_result != JX_SUCCESS) {
             printf("Error applying decoupling to serial system\n");
-            _exit(1);
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
         
         printf("  Decoupling completed in %.6f seconds\n", decoup_end - decoup_start);
@@ -1288,7 +1299,7 @@ int main(int argc, char** argv)
         
         // if (!read_success) {
         //     if (myid == 0) printf("Error during matrix reading/decoupling\n");
-        //     _exit(0);
+        //     MPI_Abort(MPI_COMM_WORLD, 0);
         //     return 1;
         // }
     }
@@ -1315,7 +1326,7 @@ int main(int argc, char** argv)
     
     if (!A_parbsr) {
         if (myid == 0) printf("Error creating parallel BSR matrix\n");
-        _exit(0);
+        MPI_Abort(MPI_COMM_WORLD, 0);
         return 1;
     }
     
@@ -1343,7 +1354,7 @@ int main(int argc, char** argv)
     
     if (!par_rhs || !par_sol) {
         printf("Rank %d: ERROR: Failed to create parallel vectors!\n", myid);
-        _exit(1);
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
 
@@ -1379,9 +1390,8 @@ int main(int argc, char** argv)
         inner_max_iterations, inner_tolerance,
         stage2_type);
     
-    fflush(stdout);
-    if (myid == 0) printf("Total time (setup+solve): %.6f seconds\n", total_end - total_start);
     double total_end = MPI_Wtime();
-    _exit(0);
+    if (myid == 0) printf("Total time (setup+solve): %.6f seconds\n", total_end - total_start);
+    MPI_Abort(MPI_COMM_WORLD, 0);
     return result;
 }
