@@ -124,6 +124,7 @@ int main(int argc, char *argv[])
    JX_Int cycle_type;
    JX_Int relax_type;
 JX_Int crlx_type;
+JX_Int rap_control;
    JX_Int measure_type;
    JX_Int rap2;
    JX_Int num_functions;
@@ -201,6 +202,7 @@ JX_Int crlx_type;
    max_levels = 25;  /* 最大网格层数 */
    cycle_type = 1;   /* Cycle 类型  1: V_Cycle; 2：W_Cycle */
    relax_type = 3;   /* Relax 类型  3: hGS; 6：hSGS */
+   rap_control    = 0;
    crlx_type       = 9;
    measure_type = 0; /* 影响值的计算方式 0：局部；1：全局 */
    rap2 = 0;         /* RAP计算方式  0：RAP；1：先算Q=AP，再算RQ */
@@ -297,7 +299,12 @@ JX_Int crlx_type;
          arg_index++;
          rap2 = 1;
       }
-      else if (strcmp(argv[arg_index], "-air") == 0)
+      else if (strcmp(argv[arg_index], "-rap") == 0)
+      {
+         arg_index++;
+         rap_control = atoi(argv[arg_index++]);
+      }
+            else if (strcmp(argv[arg_index], "-air") == 0)
       {
          arg_index++;
          restri_type = atoi(argv[arg_index++]);
@@ -392,7 +399,12 @@ JX_Int crlx_type;
          arg_index++;
          S_commpkg_switch = atof(argv[arg_index++]);
       }
-      else if (strcmp(argv[arg_index], "-airst") == 0)
+      else if (strcmp(argv[arg_index], "-rap") == 0)
+      {
+         arg_index++;
+         rap_control = atoi(argv[arg_index++]);
+      }
+            else if (strcmp(argv[arg_index], "-airst") == 0)
       {
          arg_index++;
          AIR_strong_th = atof(argv[arg_index++]);
@@ -639,6 +651,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetTol(amg_solver, tol);
       JX_PAMGSetConvCriteria(amg_solver, conv_criteria);
@@ -742,6 +756,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
@@ -896,6 +912,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
@@ -953,6 +971,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
@@ -1062,6 +1082,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
@@ -1312,6 +1334,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
@@ -1516,6 +1540,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
@@ -1598,6 +1624,8 @@ JX_Int crlx_type;
       JX_PAMGSetCycleType(amg_solver, cycle_type);
       JX_PAMGSetMeasureType(amg_solver, measure_type);
       JX_PAMGSetRAP2(amg_solver, rap2);
+      if (rap_control == 102) { JX_PAMGSetSpMtRapType(amg_solver, 7); JX_PAMGSetRapControl(amg_solver, rap_control); }
+      if (rap_control == 2) JX_PAMGSetSpMtRapType(amg_solver, 1);
       JX_PAMGSetKeepTranspose(amg_solver, keepTranspose);
       JX_PAMGSetCoarsenType(amg_solver, coarsen_type);
       JX_PAMGSetInterpType(amg_solver, interp_type);
