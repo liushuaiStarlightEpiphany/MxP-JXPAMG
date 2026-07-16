@@ -312,6 +312,7 @@ JX_Int ret_type;
          ret_type = atoi(argv[arg_index++]);
       if (ret_type == 101) jx_spmv_type = 2;
       else jx_spmv_type = 0;
+      jx_printf("[DEBUG] -ret=%d -> jx_spmv_type=%d\n", ret_type, jx_spmv_type);
       }
             else if (strcmp(argv[arg_index], "-air") == 0)
       {
