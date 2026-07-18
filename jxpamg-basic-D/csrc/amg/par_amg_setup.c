@@ -25,8 +25,8 @@ JX_UInt jx_long_size_length_interp = 0;      /* Yue Xiaoqiang 2012/10/12 */
 JX_UInt jx_real_long_size_length_rap = 0;    /* Yue Xiaoqiang 2012/10/12 */
 JX_UInt jx_real_long_size_length_interp = 0; /* Yue Xiaoqiang 2012/10/12 */
 
-extern JX_Int *jx_Pmarkers_global_rap;    /* Yue Xiaoqiang 2012/10/17 */
-extern JX_Int *jx_Pmarkers_global_interp; /* Yue Xiaoqiang 2012/10/17 */
+extern JX_Int *Pmarkers_global_rap;    /* Yue Xiaoqiang 2012/10/17 */
+extern JX_Int *Pmarkers_global_interp; /* Yue Xiaoqiang 2012/10/17 */
 
 /*!
  * \fn JX_Int jx_PAMGSetup
@@ -1100,7 +1100,7 @@ jx_hpPAMGSetup( void             *amg_vdata,
          /* Delete AP */
          jx_ParCSRMatrixDestroy(Q);
       }
-      else if (spmt_rap_type == 1 || spmt_rap_type == 3 || spmt_rap_type == 7)
+      else if (spmt_rap_type == 1)
       {
          jx_PAMGBuildCoarseOperatorKT( P_array[level], jx_hpCSRMatrixPar(A_array[level]), P_array[level], keepTranspose, &(jx_hpCSRMatrixPar(A_H)) );
       }
@@ -1155,6 +1155,7 @@ jx_hpPAMGSetup( void             *amg_vdata,
       {
          if (num_procs == 1)
          {
+            printf("1111");
             jx_ParCSRMatrix *P_par = P_array[level];
             jx_ParCSRMatrix *A_par = jx_hpCSRMatrixPar(A_array[level]);
             jx_CSRMatrix *P_csr = jx_ParCSRMatrixDiag(P_par);
@@ -1173,6 +1174,7 @@ jx_hpPAMGSetup( void             *amg_vdata,
             jx_CSRMatrixInitialize(T_csr);
             jx_CSRMatrixCopy(T_sym, T_csr, 0);
             jx_CSRMatrixDestroy(T_sym);
+            printf("2222");
             if (spgemm_adapter_numeric_multiply(R_csr, A_csr, T_csr) != 0)
             {
                jx_printf("Proc %d: T7 num T=R*A failed at level %d\n", my_id, level);
@@ -1488,7 +1490,7 @@ jx_hpPAMGSetup( void             *amg_vdata,
          JX_ILUSetLogging(smoother[j], 0);
          JX_ILUSetPrintLevel(smoother[j], 0);
          JX_ILUSetLevelOfFill(smoother[j], eu_level);
-         JX_ILUSetup(smoother[j], (JX_ParCSRMatrix)A_array[j]);
+         JX_ILUSetup(smoother[j], (jx_hpCSRMatrix *)A_array[j], NULL, NULL);
       }
    }
 
@@ -1507,13 +1509,13 @@ jx_hpPAMGSetup( void             *amg_vdata,
    }
 
    jx_TFree(opt_icor); /* Yue Xiaoqiang 2012/10/12 */
-   if (jx_Pmarkers_global_rap)
+   if (Pmarkers_global_rap)
    {
-      jx_TFree(jx_Pmarkers_global_rap); /* Yue Xiaoqiang 2012/10/17 */
+      jx_TFree(Pmarkers_global_rap); /* Yue Xiaoqiang 2012/10/17 */
    }
-   if (jx_Pmarkers_global_interp)
+   if (Pmarkers_global_interp)
    {
-      jx_TFree(jx_Pmarkers_global_interp); /* Yue Xiaoqiang 2012/10/17 */
+      jx_TFree(Pmarkers_global_interp); /* Yue Xiaoqiang 2012/10/17 */
    }
 
   /*--------------------------------------------------------------

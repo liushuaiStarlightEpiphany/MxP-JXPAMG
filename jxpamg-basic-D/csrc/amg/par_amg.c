@@ -210,7 +210,7 @@ jx_PAMGCreate()
    IS_type = 1;
    CR_use_CG = 0;
    cgc_its = 1;
-   spmt_rap_type = 1;            // Yue Xiaoqiang 2012/10/22
+   if (spmt_rap_type == 0) spmt_rap_type = 1;            // Yue Xiaoqiang 2012/10/22
    wall_time_option = 0;         // Yue Xiaoqiang 2015/09/30
    ai_measure_type = 0;          // Yue Xiaoqiang 2014/02/26
    ai_relax_type = 0;            // Yue Xiaoqiang 2014/07/06

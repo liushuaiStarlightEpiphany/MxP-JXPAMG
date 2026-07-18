@@ -30,6 +30,8 @@ endif
 
 #天河 hthreads 路径++++++++++++++++++++++++++++++++++++++++++++++++++
 HT_ROOT   = /vol8/appsoftware/mt3000_programming_env/hthreads
+BEIDOUDIR    = /vol8/home/xtu_pcy/l_s/BeidouBLAS_unified
+BEIDOUDIR    = /vol8/home/xtu_pcy/l_s/BeidouBLAS_unified
 
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # Use the OpenMP parallelism [YES] or not [#YES]
@@ -327,10 +329,12 @@ ifdef USING_HWLOC
 endif
 
 
+BEIDOUBLASINCLUDES = -I ${BEIDOUDIR}/include -I ${BEIDOUDIR}/dsp/spgemm_include -I $(JXPAMGDIR)/beidoublasgemm
+BEIDOUBLASINCLUDES = -I ${BEIDOUDIR}/include -I ${BEIDOUDIR}/dsp/spgemm_include -I $(JXPAMGDIR)/beidoublasgemm
 HTINCLUDES     = -I $(HT_ROOT)/include  
 
 # 合并所有的包含目录
-AllCINCLUDES = ${JXPAMGINCLUDES} ${JXFPAMGINCLUDES} ${MPIINCLUDES} ${HWLOCINCLUDES} ${HTINCLUDES}
+AllCINCLUDES = ${JXPAMGINCLUDES} ${JXFPAMGINCLUDES} ${MPIINCLUDES} ${HWLOCINCLUDES} ${HTINCLUDES} ${BEIDOUBLASINCLUDES} ${BEIDOUBLASINCLUDES}
 
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # basic libs
@@ -395,4 +399,4 @@ FFLAGS = ${FDEFS} ${F_COMPILE_OPTION} ${AllCINCLUDES} ${LIBS2JXPAMG}
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 JXPAMGLIB  = -L ${JXPAMGDIR}/lib -lJXPAMG
 JXFPAMGLIB = -L ${JXFPAMGDIR}/lib -lJXFPAMG
-ALLLIBS    =  ${JXPAMGLIB} ${JXFPAMGLIB} ${LIBS2JXPAMG}
+ALLLIBS    =  ${JXPAMGLIB} ${JXFPAMGLIB} -L ${BEIDOUDIR}/lib $(JXPAMGDIR)/beidoublasgemm/beidoublas_spgemm.o $(JXPAMGDIR)/spgemm_adapter.o -lbeidouBLAS ${HTLIB} ${LIBS2JXPAMG}

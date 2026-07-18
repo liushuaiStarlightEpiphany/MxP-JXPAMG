@@ -663,7 +663,7 @@ JX_Int jx_SeqVectorSetDataOwner(jx_Vector *vector, JX_Int owns_data);
 JX_Int jx_SeqVectorDestroy(jx_Vector *vector);
 JX_Int jx_SeqVectorCopy(jx_Vector *x, jx_Vector *y);
 JX_Int jx_SeqVectorSetConstantValues(jx_Vector *x, JX_Real value);
-JX_Real jx_SeqVectorInnerProd(jx_Vector *x, jx_Vector *y, JX_Int myid);
+JX_Real jx_SeqVectorInnerProd(jx_Vector *x, jx_Vector *y);
 JX_Real jx_SeqVectorInnerProd_origin(jx_Vector *x, jx_Vector *y);
 JX_Real jx_SeqVectorInnerProd_TH(jx_Vector *x, jx_Vector *y, JX_Int myid);
 JX_Int jx_SeqVectorPrint(jx_Vector *vector, char *file_name);

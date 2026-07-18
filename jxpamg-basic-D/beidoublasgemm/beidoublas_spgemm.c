@@ -467,7 +467,7 @@ int spgemm_adapter_numeric_multiply(
 {
     spgemm_algo_t algo = spgemm_algo_from_env();
     const char *algo_name = spgemm_algo_name(algo);
-
+    printf("3333");
     fprintf(stderr, "[bdblas-num] algo=%s A:%dx%d nnz=%d B:%dx%d nnz=%d C:%dx%d nnz=%d\n",
             algo_name, A->num_rows, A->num_cols, A->num_nonzeros,
             B->num_rows, B->num_cols, B->num_nonzeros,
